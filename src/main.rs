@@ -4,7 +4,7 @@ use instant::*;
 mod framework;
 mod gui;
 mod renderer;
-mod sub_render_pass;
+mod draw_pass;
 
 type V3 = Vector3<f32>;
 

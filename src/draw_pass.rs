@@ -3,7 +3,7 @@ use cgmath::{Vector2, Vector3};
 use wgpu::util::DeviceExt;
 use wgpu::*;
 
-pub struct SubRenderPass {
+pub struct DrawPass {
     pub pipeline: RenderPipeline,
     pub vertex_buffer: Buffer,
     pub vertex_buffer_length: usize,
@@ -13,7 +13,7 @@ pub struct SubRenderPass {
     pub topology: PrimitiveTopology,
 }
 
-impl SubRenderPass {
+impl DrawPass {
     pub fn new(
         surface_config: &SurfaceConfiguration,
         device: &Device,
@@ -34,8 +34,8 @@ impl SubRenderPass {
             usage: BufferUsages::INDEX,
         });
         let (pipeline, matrix_bind_group) =
-            SubRenderPass::create_pipeline(surface_config, device, queue, shader, topology);
-        SubRenderPass {
+            DrawPass::create_pipeline(surface_config, device, queue, shader, topology);
+        DrawPass {
             pipeline,
             vertex_buffer,
             vertex_buffer_length: 0,
@@ -142,7 +142,7 @@ impl SubRenderPass {
         shader: &ShaderModule,
     ) {
         let (pipeline, bind_group) =
-            SubRenderPass::create_pipeline(surface_config, device, queue, shader, self.topology);
+            DrawPass::create_pipeline(surface_config, device, queue, shader, self.topology);
         self.pipeline = pipeline;
         self.matrix_bind_group = bind_group;
     }

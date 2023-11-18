@@ -1,10 +1,9 @@
 use crate::gui::Gui;
-use crate::sub_render_pass::SubRenderPass;
+use crate::draw_pass::DrawPass;
 use bytemuck::{Pod, Zeroable};
 use cgmath::Vector3;
 use egui::FullOutput;
 use egui_wgpu::renderer::ScreenDescriptor;
-use std::iter;
 use wgpu::*;
 
 #[repr(C)]
@@ -19,7 +18,7 @@ unsafe impl Zeroable for Vertex {}
 
 pub struct Renderer {
     shader: ShaderModule,
-    sub_rpass_triangles: SubRenderPass,
+    sub_rpass_triangles: DrawPass,
     egui_rpass: egui_wgpu::renderer::Renderer,
     surface_config: SurfaceConfiguration,
     pub make_screenshot: bool,
@@ -38,7 +37,7 @@ impl Renderer {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
         });
 
-        let mut sub_rpass_triangles = SubRenderPass::new(
+        let mut sub_rpass_triangles = DrawPass::new(
             surface_config,
             device,
             queue,
