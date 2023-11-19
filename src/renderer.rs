@@ -1,4 +1,4 @@
-use crate::gui::Gui;
+use crate::draw_pass::DrawBuffer;
 use crate::draw_pass::DrawPass;
 use bytemuck::{Pod, Zeroable};
 use cgmath::Vector3;
@@ -10,7 +10,6 @@ use wgpu::*;
 #[derive(Clone, Copy)]
 pub struct Vertex {
     pub _pos: [f32; 3],
-    pub _color: [f32; 4],
     pub _tex_coord: [f32; 2],
 }
 unsafe impl Pod for Vertex {}
@@ -18,7 +17,7 @@ unsafe impl Zeroable for Vertex {}
 
 pub struct Renderer {
     shader: ShaderModule,
-    sub_rpass_triangles: DrawPass,
+    sub_rpasses_triangles: Vec<DrawPass>,
     egui_rpass: egui_wgpu::renderer::Renderer,
     surface_config: SurfaceConfiguration,
     pub make_screenshot: bool,
@@ -37,29 +36,46 @@ impl Renderer {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
         });
 
-        let mut sub_rpass_triangles = DrawPass::new(
-            surface_config,
-            device,
-            queue,
-            &shader,
-            PrimitiveTopology::TriangleList,
-        );
-        sub_rpass_triangles.update_vertex_buffer(
-            device,
-            &[
-                (Vector3::new(-0.5, 0.5, 0.5), Color::WHITE),
-                (Vector3::new(0.5, 0.5, 0.5), Color::WHITE),
-                (Vector3::new(-0.5, -0.5, 0.5), Color::WHITE),
-                (Vector3::new(0.5, -0.5, 0.5), Color::WHITE),
-            ],
-        );
-        sub_rpass_triangles.update_index_buffer(device, &[0, 1, 2, 1, 2, 3]);
+        let mut sub_rpasses_triangles = Vec::new();
+        for draw_buffer_index in 0..5usize {
+            let texture_file_name = match draw_buffer_index {
+                0 => "./assets/earth.png",
+                1 => "./assets/water.png",
+                2 => "./assets/fire.png",
+                3 => "./assets/air.png",
+                _ => "./assets/akash.png",
+            };
+            let draw_buffer = DrawBuffer::new(device, queue, texture_file_name);
+
+            let mut sub_rpass_triangles = DrawPass::new(
+                surface_config,
+                device,
+                queue,
+                draw_buffer,
+                &shader,
+                PrimitiveTopology::TriangleList,
+            );
+            let d = 0.1 + 0.05 * (draw_buffer_index as f32);
+            let md = -0.1 + 0.05 * (draw_buffer_index as f32);
+            sub_rpass_triangles.update_vertex_buffer(
+                device,
+                draw_buffer_index,
+                &[
+                    (Vector3::new(md, d, d), [0.0, 1.0]),
+                    (Vector3::new(d, d, d), [1.0, 1.0]),
+                    (Vector3::new(md, md, d), [0.0, 0.0]),
+                    (Vector3::new(d, md, d), [1.0, 0.0]),
+                ],
+            );
+            sub_rpass_triangles.update_index_buffer(device, &[0, 1, 2, 1, 2, 3]);
+            sub_rpasses_triangles.push(sub_rpass_triangles);
+        }
 
         let egui_rpass = egui_wgpu::renderer::Renderer::new(device, surface_config.format, None, 1);
 
         Renderer {
             shader,
-            sub_rpass_triangles,
+            sub_rpasses_triangles,
             egui_rpass,
             surface_config: surface_config.clone(),
             make_screenshot: false,
@@ -69,12 +85,9 @@ impl Renderer {
 
     fn recreate_pipelines(&mut self, device: &Device, queue: &Queue) {
         self.recreate_pipelines = false;
-        self.sub_rpass_triangles.recreate_pipeline(
-            &self.surface_config,
-            device,
-            queue,
-            &self.shader,
-        );
+        self.sub_rpasses_triangles.iter_mut().for_each(|srp| {
+            srp.recreate_pipeline(&self.surface_config, device, queue, &self.shader);
+        });
     }
 
     pub fn generate_matrix(aspect_ratio: f32) -> cgmath::Matrix4<f32> {
@@ -146,7 +159,9 @@ impl Renderer {
                 depth_stencil_attachment: None,
             });
 
-            self.sub_rpass_triangles.render(&mut rpass);
+            self.sub_rpasses_triangles
+                .iter()
+                .for_each(|srp| srp.render(&mut rpass));
 
             self.egui_rpass
                 .render(&mut rpass, &clipped_primitives, &screen_descriptor);
