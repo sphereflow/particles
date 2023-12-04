@@ -1,13 +1,27 @@
+use std::mem;
+
+use crate::camera::Camera;
 use crate::renderer::{Renderer, Vertex};
+use crate::Particle;
 use cgmath::Vector3;
 use wgpu::util::DeviceExt;
 use wgpu::*;
+
+const INSTANCE_LAYOUT_POSITION: VertexBufferLayout = VertexBufferLayout {
+    array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
+    step_mode: VertexStepMode::Vertex,
+    attributes: &vertex_attr_array![0 => Float32x3],
+};
+
+const INSTANCE_LAYOUT_PARTICLE: VertexBufferLayout = Particle::get_instance_layout();
 
 pub struct DrawBuffer {
     pub vertex_buffer: Buffer,
     pub vertex_buffer_length: usize,
     pub index_buffer: Buffer,
     pub index_buffer_length: usize,
+    pub instance_buffer: Buffer,
+    pub instance_buffer_length: usize,
     pub texture: Texture,
     pub texture_bind_group: BindGroup,
     pub texture_bind_group_layout: BindGroupLayout,
@@ -29,11 +43,19 @@ impl DrawBuffer {
         });
         let (texture, texture_bind_group, texture_bind_group_layout) =
             DrawBuffer::create_texture(device, queue, texture_filename);
+        let instance_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("instance buffer"),
+            size: 0,
+            usage: BufferUsages::VERTEX,
+            mapped_at_creation: false,
+        });
         DrawBuffer {
             vertex_buffer,
             vertex_buffer_length: 0,
             index_buffer,
             index_buffer_length: 0,
+            instance_buffer,
+            instance_buffer_length: 0,
             texture,
             texture_bind_group,
             texture_bind_group_layout,
@@ -130,6 +152,7 @@ pub struct DrawPass {
     pub pipeline: RenderPipeline,
     pub draw_buffer: DrawBuffer,
     pub matrix_bind_group: BindGroup,
+    pub view_matrix_buffer: Buffer,
     pub topology: PrimitiveTopology,
 }
 
@@ -140,13 +163,15 @@ impl DrawPass {
         queue: &Queue,
         draw_buffer: DrawBuffer,
         shader: &ShaderModule,
+        camera: &mut Camera,
         topology: PrimitiveTopology,
     ) -> Self {
-        let (pipeline, matrix_bind_group) = DrawPass::create_pipeline(
+        let (pipeline, matrix_bind_group, view_matrix_buffer) = DrawPass::create_pipeline(
             device,
             queue,
             surface_config,
             shader,
+            camera,
             topology,
             &draw_buffer.texture_bind_group_layout,
         );
@@ -154,6 +179,7 @@ impl DrawPass {
             pipeline,
             draw_buffer,
             matrix_bind_group,
+            view_matrix_buffer,
             topology,
         }
     }
@@ -163,55 +189,27 @@ impl DrawPass {
         queue: &Queue,
         surface_config: &SurfaceConfiguration,
         shader: &ShaderModule,
+        camera: &mut Camera,
         primitive_topology: PrimitiveTopology,
         texture_bind_group_layout: &BindGroupLayout,
-    ) -> (RenderPipeline, BindGroup) {
-        // layout for the projection matrix
-        let transform_bind_group_layout =
-            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("Renderer: bind group layout"),
-                entries: &[BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(64),
-                    },
-                    count: None,
-                }],
-            });
-
-        // create the projection matrix
-        let aspect = surface_config.width as f32 / surface_config.height as f32;
-        let mx = Renderer::generate_matrix(aspect);
-        let mx_ref: &[f32; 16] = mx.as_ref();
-        let mx_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("u_Transform"),
-            contents: bytemuck::cast_slice(mx_ref),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        // write to the projection matix buffer
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("u_Transform"),
-            layout: &transform_bind_group_layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Buffer(BufferBinding {
-                    buffer: &mx_buf,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
-        });
-        queue.write_buffer(&mx_buf, 0, bytemuck::cast_slice(mx_ref));
+    ) -> (RenderPipeline, BindGroup, Buffer) {
+        let (bind_group, transform_bind_group_layout, buffer) =
+            Self::create_view_matrix_bind_groups(device, queue, camera);
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("pipeline layout"),
             bind_group_layouts: &[&transform_bind_group_layout, &texture_bind_group_layout],
             push_constant_ranges: &[],
         });
+
+        let vertex_layout = VertexBufferLayout {
+            array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: VertexStepMode::Vertex,
+            attributes: &vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+        };
+
+        let instance_layout = INSTANCE_LAYOUT_PARTICLE;
+        // let instance_layout = INSTANCE_LAYOUT_POSITION;
 
         (
             device.create_render_pipeline(&RenderPipelineDescriptor {
@@ -220,11 +218,7 @@ impl DrawPass {
                 vertex: VertexState {
                     module: shader,
                     entry_point: "vs_main",
-                    buffers: &[wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                        step_mode: VertexStepMode::Vertex,
-                        attributes: &vertex_attr_array![0 => Float32x3, 1 => Float32x2],
-                    }],
+                    buffers: &[vertex_layout, instance_layout],
                 },
                 fragment: Some(FragmentState {
                     module: shader,
@@ -260,6 +254,7 @@ impl DrawPass {
                 multiview: None,
             }),
             bind_group,
+            buffer,
         )
     }
 
@@ -269,25 +264,76 @@ impl DrawPass {
         device: &Device,
         queue: &Queue,
         shader: &ShaderModule,
+        camera: &mut Camera,
     ) {
-        let (pipeline, bind_group) = DrawPass::create_pipeline(
+        let (pipeline, bind_group, view_matrix_buffer) = DrawPass::create_pipeline(
             device,
             queue,
             surface_config,
             shader,
+            camera,
             self.topology,
             &self.draw_buffer.texture_bind_group_layout,
         );
         self.pipeline = pipeline;
         self.matrix_bind_group = bind_group;
+        self.view_matrix_buffer = view_matrix_buffer;
     }
 
-    pub fn update_vertex_buffer(
-        &mut self,
+    fn create_view_matrix_bind_groups(
         device: &Device,
-        draw_buffer_index: usize,
-        vertices: &[(Vector3<f32>, [f32; 2])],
-    ) {
+        queue: &Queue,
+        camera: &mut Camera,
+    ) -> (BindGroup, BindGroupLayout, Buffer) {
+        // create the projection matrix buffer
+        let mx = camera.get_view_matrix();
+        let mx_ref: &[f32; 16] = mx.as_ref();
+        let mx_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("u_Transform"),
+            contents: bytemuck::cast_slice(mx_ref),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // layout for the projection matrix
+        let transform_bind_group_layout =
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: Some("Renderer: bind group layout"),
+                entries: &[BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: BufferSize::new(64),
+                    },
+                    count: None,
+                }],
+            });
+
+        // write to the projection matix buffer
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("u_Transform"),
+            layout: &transform_bind_group_layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer(BufferBinding {
+                    buffer: &mx_buf,
+                    offset: 0,
+                    size: None,
+                }),
+            }],
+        });
+        queue.write_buffer(&mx_buf, 0, bytemuck::cast_slice(mx_ref));
+        (bind_group, transform_bind_group_layout, mx_buf)
+    }
+
+    pub fn update_view_matrix(&mut self, queue: &Queue, camera: &mut Camera) {
+        let mx = camera.get_view_matrix();
+        let mx_ref: &[f32; 16] = mx.as_ref();
+        queue.write_buffer(&self.view_matrix_buffer, 0, bytemuck::cast_slice(mx_ref));
+    }
+
+    pub fn update_vertex_buffer(&mut self, device: &Device, vertices: &[(Vector3<f32>, [f32; 2])]) {
         let vertex_data: Vec<Vertex> = vertices
             .iter()
             .map(|(p, tex_coord)| Vertex {
@@ -314,13 +360,53 @@ impl DrawPass {
         self.draw_buffer.index_buffer_length = indices.len();
     }
 
+    pub fn update_instance_buffer(&mut self, device: &Device, instances: &[Vector3<f32>]) {
+        let instance_floats = instances
+            .iter()
+            .map(|v| [v.x, v.y, v.z])
+            .collect::<Vec<[f32; 3]>>()
+            .concat();
+        self.draw_buffer.instance_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(&instance_floats),
+                usage: BufferUsages::VERTEX,
+            });
+        self.draw_buffer.instance_buffer_length = instances.len();
+    }
+
     pub fn render<'a>(&'a self, rpass: &mut RenderPass<'a>) {
         rpass.set_bind_group(0, &self.matrix_bind_group, &[]);
         rpass.set_bind_group(1, &self.draw_buffer.texture_bind_group, &[]);
         rpass.set_pipeline(&self.pipeline);
         rpass.set_vertex_buffer(0, self.draw_buffer.vertex_buffer.slice(..)); // slot 0
         rpass.set_index_buffer(self.draw_buffer.index_buffer.slice(..), IndexFormat::Uint16);
+        rpass.set_vertex_buffer(1, self.draw_buffer.instance_buffer.slice(..));
         // rpass.draw(0..(self.vertex_buffer_length as u32), 0..1); // vertex range, instance range
-        rpass.draw_indexed(0..(self.draw_buffer.index_buffer_length as u32), 0, 0..1);
+        rpass.draw_indexed(
+            0..(self.draw_buffer.index_buffer_length as u32),
+            0,
+            0..self.draw_buffer.instance_buffer_length as u32,
+        );
+    }
+
+    pub fn render_with_instance_buffer<'a>(
+        &'a self,
+        rpass: &mut RenderPass<'a>,
+        instance_buffer: &'a Buffer,
+        instance_buffer_length: usize,
+    ) {
+        rpass.set_bind_group(0, &self.matrix_bind_group, &[]);
+        rpass.set_bind_group(1, &self.draw_buffer.texture_bind_group, &[]);
+        rpass.set_pipeline(&self.pipeline);
+        rpass.set_vertex_buffer(0, self.draw_buffer.vertex_buffer.slice(..)); // slot 0
+        rpass.set_index_buffer(self.draw_buffer.index_buffer.slice(..), IndexFormat::Uint16);
+        rpass.set_vertex_buffer(1, instance_buffer.slice(..));
+        // rpass.draw(0..(self.vertex_buffer_length as u32), 0..1); // vertex range, instance range
+        rpass.draw_indexed(
+            0..(self.draw_buffer.index_buffer_length as u32),
+            0,
+            0..instance_buffer_length as u32,
+        );
     }
 }

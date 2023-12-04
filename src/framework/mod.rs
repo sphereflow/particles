@@ -1,6 +1,8 @@
-use crate::gui::Gui;
 use crate::renderer::Renderer;
-use wgpu::{Adapter, Dx12Compiler, Instance, InstanceDescriptor, Surface};
+use crate::{gui::Gui, App};
+use wgpu::{
+    Adapter, Dx12Compiler, Gles3MinorVersion, Instance, InstanceDescriptor, InstanceFlags, Surface,
+};
 use winit::{
     event::{self, WindowEvent},
     event_loop::{ControlFlow, EventLoop, EventLoopBuilder},
@@ -149,6 +151,8 @@ fn create_instance() -> Instance {
     let instance_desc = InstanceDescriptor {
         backends: backend,
         dx12_shader_compiler: Dx12Compiler::default(),
+        flags: InstanceFlags::default(),
+        gles_minor_version: Gles3MinorVersion::Automatic,
     };
     wgpu::Instance::new(instance_desc)
 }
@@ -179,11 +183,11 @@ fn start(
     surface.configure(&device, &surface_config);
 
     log::info!("Initializing the example...");
-    let mut gui = Gui::new(&window, &event_loop, &surface_config);
+    let mut gui = Gui::new(&window, &event_loop);
+    let renderer = Renderer::init(&surface_config, &device, &queue);
+    let mut app = App::new(&device, &queue, renderer);
     let context = egui::Context::default();
     context.set_pixels_per_point(window.scale_factor() as f32);
-
-    let mut renderer = Renderer::init(&surface_config, &device, &queue);
 
     log::info!("Entering render loop...");
     event_loop.run(move |event, _, control_flow| {
@@ -193,6 +197,7 @@ fn start(
         } else {
             ControlFlow::Poll
         };
+        app.update(&device, &queue);
 
         match event {
             event::Event::RedrawEventsCleared => {
@@ -211,8 +216,8 @@ fn start(
                 println!("Resized: {:?}", size);
                 surface_config.width = size.width.max(1);
                 surface_config.height = size.height.max(1);
-                renderer.resize(&surface_config, &device, &queue);
                 surface.configure(&device, &surface_config);
+                app.renderer.resize(&surface_config, &device, &queue);
             }
             event::Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
@@ -220,8 +225,8 @@ fn start(
                 }
                 _ => {
                     // forward events to egui
-                    let _ = gui.winit_state.on_event(&context, &event);
-                    gui.winit_update(&event, &surface_config);
+                    let _ = gui.winit_state.on_window_event(&context, &event);
+                    app.winit_update(&event);
                 }
             },
             event::Event::RedrawRequested(_) => {
@@ -235,13 +240,14 @@ fn start(
                     }
                 };
 
-                let output = gui.update(&context, &window);
+                let output = gui.update(&context, &window, &device, &mut app);
 
-                renderer.render(
+                app.renderer.render(
                     &frame,
                     &device,
                     &queue,
                     output,
+                    &mut app.compute,
                     &context,
                     window.scale_factor() as f32,
                 );
@@ -254,6 +260,9 @@ fn start(
         if gui.exit_app {
             *control_flow = ControlFlow::Exit;
         }
+        app.renderer
+            .sub_rpass_triangles
+            .update_instance_buffer(&device, &app.psys.get_instances());
 
         // gui.app.update();
     });

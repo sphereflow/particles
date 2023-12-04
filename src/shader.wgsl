@@ -15,11 +15,12 @@ var<uniform> u_transform: Transform;
 fn vs_main(
         @location(0) in_pos: vec3<f32>,
         @location(1) tex_coord: vec2<f32>,
+        @location(2) instance_pos: vec4<f32>,
+        @location(3) particle_type: u32,
         ) -> VertexOutput {
     var out: VertexOutput;
-    // out.out_pos = u_transform.transform * vec4<f32>(in_pos, 1.0);
-    out.out_pos = vec4<f32>(in_pos, 1.0);
-    out.tex_coord = tex_coord;
+    out.out_pos = u_transform.transform * vec4<f32>(in_pos + instance_pos.xyz, 1.0);
+    out.tex_coord = vec2<f32>((tex_coord.x + f32(particle_type)) * 0.2, tex_coord.y);
     return out;
 }
 
