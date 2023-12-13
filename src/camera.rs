@@ -49,8 +49,20 @@ impl Camera {
         match direction {
             Direction::Up => self.pos += (up * amount_units).truncate(),
             Direction::Down => self.pos -= (up * amount_units).truncate(),
-            Direction::Forward => self.pos += (fwd * amount_units).truncate(),
-            Direction::Backward => self.pos -= (fwd * amount_units).truncate(),
+            Direction::Forward => {
+                if let Some((_, distance)) = self.look_at_distance.as_mut() {
+                    *distance -= amount_units;
+                } else {
+                    self.pos += (fwd * amount_units).truncate();
+                }
+            }
+            Direction::Backward => {
+                if let Some((_, distance)) = self.look_at_distance.as_mut() {
+                    *distance += amount_units;
+                } else {
+                    self.pos -= (fwd * amount_units).truncate()
+                }
+            }
             Direction::Left => self.pos += (right * amount_units).truncate(),
             Direction::Right => self.pos -= (right * amount_units).truncate(),
             Direction::RotateLeft => self.rot = self.rot * rot_left,
@@ -65,12 +77,8 @@ impl Camera {
             }
             let diff = look_at - self.pos;
             self.pos = look_at - diff.normalize() * distance;
-            if self.pos.y < 0.7 * distance {
-                self.rot = Rotation::look_at(diff, V3::new(0., 1., 0.));
-            } else  {
-
-                self.rot = Rotation::look_at(diff, V3::new(-self.pos.x, 0., -self.pos.z));
-            }
+            let up_v = self.rot.invert().rotate_vector(V3::new(0., 1., 0.));
+            self.rot = Rotation::look_at(diff, up_v);
         }
         let trans = Matrix4::from_translation(self.pos);
         let rot = Matrix4::from(self.rot);
