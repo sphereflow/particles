@@ -2,7 +2,6 @@ use cgmath::Vector2;
 use egui::*;
 use egui_plot::{Line, Plot};
 use instant::Instant;
-use wgpu::Device;
 
 use crate::{camera::Camera, poly3::Poly7, App, SimParams};
 

@@ -5,79 +5,6 @@ use std::array;
 
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 #[repr(C)]
-pub struct Poly3 {
-    pub a: f32,
-    pub b: f32,
-    pub c: f32,
-    pub d: f32,
-}
-
-impl Poly3 {
-    pub fn new() -> Self {
-        Poly3 {
-            a: 0.,
-            b: -1.,
-            c: 1.,
-            d: -0.25,
-        }
-    }
-
-    pub fn zero() -> Self {
-        Poly3 {
-            a: 0.,
-            b: 0.,
-            c: 0.,
-            d: 0.,
-        }
-    }
-
-    pub fn const_val(val: f32) -> Self {
-        Poly3 {
-            a: 0.,
-            b: 0.,
-            c: 0.,
-            d: val,
-        }
-    }
-
-    pub fn from_points(points: [Vector2<f32>; 4]) -> Option<Self> {
-        // check that x coords are different from each other
-        // create vandermonde
-        let mut m: [[f32; 4]; 4] = std::array::from_fn(|i| {
-            let x = points[i].x;
-            [1.0, x, x * x, x * x * x]
-        });
-        // invert it
-        let inv = inverse(&mut m);
-        for x in 0..4 {
-            for y in 0..4 {
-                if !inv[x][y].is_finite() || inv[x][y].is_nan() {
-                    return None;
-                }
-            }
-        }
-        // multiply with y coords
-        let ys = [points[0].y, points[1].y, points[2].y, points[3].y];
-        let [d, c, b, a] = multiply_vector(&inv, &ys);
-        // return poly
-        Some(Poly3 { a, b, c, d })
-    }
-
-    pub fn eval(&self, x: f32) -> f32 {
-        let x2 = x * x;
-        let x3 = x2 * x;
-        self.a * x3 + self.b * x2 + self.c * x + self.d
-    }
-
-    pub fn plot_points(&self) -> PlotPoints {
-        (0..100)
-            .map(|x| [x as f64 * 0.01, self.eval(x as f32 * 0.01) as f64])
-            .collect()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Pod, Zeroable)]
-#[repr(C)]
 pub struct Poly7 {
     pub coeffs: [f32; 8],
 }
@@ -116,9 +43,9 @@ impl Poly7 {
         });
         // invert it
         let inv = inverse(&mut m);
-        for x in 0..8 {
-            for y in 0..8 {
-                if !inv[x][y].is_finite() || inv[x][y].is_nan() {
+        for col in inv.iter() {
+            for elem in col {
+                if !elem.is_finite() || elem.is_nan() {
                     return None;
                 }
             }
