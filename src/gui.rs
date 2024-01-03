@@ -3,7 +3,7 @@ use egui::*;
 use egui_plot::{Line, Plot};
 use instant::Instant;
 
-use crate::{camera::Camera, poly3::Poly7, App, SimParams};
+use crate::{camera::Camera, poly7::Poly7, App, SimParams};
 
 pub struct Gui {
     pub winit_state: egui_winit::State,

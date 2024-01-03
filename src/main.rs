@@ -17,7 +17,7 @@ mod draw_pass;
 mod framework;
 mod grid;
 mod gui;
-mod poly3;
+mod poly7;
 mod renderer;
 mod sim_params;
 
