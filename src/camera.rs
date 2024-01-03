@@ -1,11 +1,16 @@
+use crate::cursor::Cursor;
 use crate::{framework, zero_v3, V3};
 use cgmath::prelude::*;
 use cgmath::{Deg, Matrix, Matrix4, Quaternion, Rotation3};
 
+const NEAR_PLANE_DISTANCE: f32 = 0.1;
+
 pub struct Camera {
     persp_mat: Matrix4<f32>,
-    aspect: f32,
+    screen_width: f32,
+    screen_height: f32,
     fov_degrees: f32,
+    pub cursor: Cursor,
     pub look_at_distance: Option<(V3, f32)>,
     pos: V3,
     pub units_per_second: f32,
@@ -16,13 +21,15 @@ pub struct Camera {
 impl Camera {
     pub fn new(screen_width: f32, screen_height: f32, fov_degrees: f32) -> Self {
         let aspect = screen_width / screen_height;
-        let persp = cgmath::perspective(Deg(fov_degrees), aspect, 0.1, 100.0);
+        let persp_mat = cgmath::perspective(Deg(fov_degrees), aspect, NEAR_PLANE_DISTANCE, 100.0);
         Camera {
-            persp_mat: persp.into(),
-            aspect,
+            persp_mat,
+            screen_width,
+            screen_height,
             fov_degrees,
+            cursor: Cursor::new(),
             pos: zero_v3(),
-            units_per_second: 2.0,
+            units_per_second: 10.0,
             angle_per_second: 45.0,
             rot: Quaternion::from_sv(1.0, zero_v3()),
             look_at_distance: Some((zero_v3(), 5.0)),
@@ -30,8 +37,16 @@ impl Camera {
     }
 
     pub fn resize(&mut self, screen_width: f32, screen_height: f32) {
-        self.aspect = screen_width / screen_height;
-        self.persp_mat = cgmath::perspective(Deg(self.fov_degrees), self.aspect, 0.1, 100.0);
+        let aspect = screen_width / screen_height;
+        self.screen_width = screen_width;
+        self.screen_height = screen_height;
+        self.update_cursor();
+        self.persp_mat = cgmath::perspective(Deg(self.fov_degrees), aspect, 0.1, 100.0);
+    }
+
+    pub fn update_cursor(&mut self) {
+        self.cursor
+            .update(self.screen_width, self.screen_height, self.pos, self.rot);
     }
 
     // move is a keyword in Rust so this function can not be named 'move'

@@ -19,9 +19,9 @@ pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
 
 #[allow(dead_code)]
 pub fn cast_slice<T>(data: &[T]) -> &[u8] {
-    use std::{mem::size_of, slice::from_raw_parts};
+    use std::{mem::size_of_val, slice::from_raw_parts};
 
-    unsafe { from_raw_parts(data.as_ptr() as *const u8, data.len() * size_of::<T>()) }
+    unsafe { from_raw_parts(data.as_ptr() as *const u8, size_of_val(data)) }
 }
 
 struct Setup {
@@ -104,7 +104,7 @@ async fn setup(title: &str) -> Setup {
 }
 
 async fn create_adapter(instance: &Instance, surface: &Surface) -> Adapter {
-    wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(surface))
+    wgpu::util::initialize_adapter_from_env_or_default(instance, Some(surface))
         .await
         .expect("No suitable GPU adapters found on the system!")
 }
@@ -117,12 +117,12 @@ fn create_window(title: &str, event_loop: &EventLoop<()>) -> winit::window::Wind
         use winit::platform::windows::WindowBuilderExtWindows;
         builder = builder.with_no_redirection_bitmap(true);
     }
-    return builder.build(&event_loop).unwrap();
+    let window = builder.build(event_loop).unwrap();
 
     #[cfg(target_arch = "wasm32")]
     {
-        let mut width = width;
-        let mut height = height;
+        let mut width = 0;
+        let mut height = 0;
         use winit::platform::web::WindowExtWebSys;
         console_log::init().expect("could not initialize logger");
         std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -142,6 +142,7 @@ fn create_window(title: &str, event_loop: &EventLoop<()>) -> winit::window::Wind
             })
             .expect("couldn't append canvas to document body");
     }
+    window
 }
 
 fn create_instance() -> Instance {
@@ -260,50 +261,15 @@ fn start(
         if gui.exit_app {
             *control_flow = ControlFlow::Exit;
         }
-        app.renderer
-            .sub_rpass_triangles
-            .update_instance_buffer(&device, &app.psys.get_instances());
+        let (instances_raw, num_instances) = app.psys.get_instances();
+        app.renderer.sub_rpass_triangles.update_instance_buffer(
+            &device,
+            &instances_raw,
+            num_instances,
+        );
 
         // gui.app.update();
     });
-}
-
-// Initialize logging in platform dependant ways.
-fn init_logger() {
-    cfg_if::cfg_if! {
-        if #[cfg(target_arch = "wasm32")] {
-            // As we don't have an environment to pull logging level from, we use the query string.
-            let query_string = web_sys::window().unwrap().location().search().unwrap();
-            let query_level: Option<log::LevelFilter> = parse_url_query_string(&query_string, "RUST_LOG")
-                .and_then(|x| x.parse().ok());
-
-            // We keep wgpu at Error level, as it's very noisy.
-            let base_level = query_level.unwrap_or(log::LevelFilter::Info);
-            let wgpu_level = query_level.unwrap_or(log::LevelFilter::Error);
-
-            // On web, we use fern, as console_log doesn't have filtering on a per-module level.
-            fern::Dispatch::new()
-                .level(base_level)
-                .level_for("wgpu_core", wgpu_level)
-                .level_for("wgpu_hal", wgpu_level)
-                .level_for("naga", wgpu_level)
-                .chain(fern::Output::call(console_log::log))
-                .apply()
-                .unwrap();
-            std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-        } else {
-            // parse_default_env will read the RUST_LOG environment variable and apply it on top
-            // of these default filters.
-            env_logger::builder()
-                .filter_level(log::LevelFilter::Info)
-                // We keep wgpu at Error level, as it's very noisy.
-                .filter_module("wgpu_core", log::LevelFilter::Error)
-                .filter_module("wgpu_hal", log::LevelFilter::Error)
-                .filter_module("naga", log::LevelFilter::Error)
-                .parse_default_env()
-                .init();
-        }
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -313,7 +279,7 @@ pub fn wgpu_main() {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn wgpu_main(width: u32, height: u32) {
+pub fn wgpu_main() {
     wasm_bindgen_futures::spawn_local(async move {
         let setup = setup("Particles").await;
         start(setup);

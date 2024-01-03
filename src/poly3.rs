@@ -1,9 +1,7 @@
-use std::{array, ops::IndexMut};
-
 use bytemuck::{Pod, Zeroable};
 use cgmath::Vector2;
-use egui::Ui;
 use egui_plot::PlotPoints;
+use std::array;
 
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 #[repr(C)]

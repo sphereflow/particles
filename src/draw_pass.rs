@@ -1,19 +1,48 @@
+use std::borrow::Cow;
 use std::mem;
 
 use crate::camera::Camera;
-use crate::renderer::{Renderer, Vertex};
-use crate::Particle;
+use crate::renderer::Vertex;
+use crate::{Particle, V3};
 use cgmath::Vector3;
 use wgpu::util::DeviceExt;
 use wgpu::*;
 
-const INSTANCE_LAYOUT_POSITION: VertexBufferLayout = VertexBufferLayout {
-    array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
-    step_mode: VertexStepMode::Vertex,
-    attributes: &vertex_attr_array![0 => Float32x3],
+#[allow(dead_code)]
+pub const INSTANCE_LAYOUT_POSITION: VertexBufferLayout = VertexBufferLayout {
+    array_stride: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+    step_mode: VertexStepMode::Instance,
+    attributes: &[VertexAttribute {
+        format: VertexFormat::Float32x4,
+        offset: 0,
+        shader_location: 2,
+    }],
 };
 
-const INSTANCE_LAYOUT_PARTICLE: VertexBufferLayout = Particle::get_instance_layout();
+#[allow(dead_code)]
+pub const INSTANCE_LAYOUT_VECTOR_FIELD: VertexBufferLayout = VertexBufferLayout {
+    array_stride: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
+    step_mode: VertexStepMode::Instance,
+    attributes: &[
+        VertexAttribute {
+            format: VertexFormat::Float32x4,
+            offset: 0,
+            shader_location: 2,
+        },
+        VertexAttribute {
+            format: VertexFormat::Float32x4,
+            offset: 16,
+            shader_location: 3,
+        },
+        VertexAttribute {
+            format: VertexFormat::Float32x4,
+            offset: 32,
+            shader_location: 4,
+        }
+    ],
+};
+
+pub const INSTANCE_LAYOUT_PARTICLE: wgpu::VertexBufferLayout = Particle::get_instance_layout();
 
 pub struct DrawBuffer {
     pub vertex_buffer: Buffer,
@@ -28,7 +57,7 @@ pub struct DrawBuffer {
 }
 
 impl DrawBuffer {
-    pub fn new(device: &Device, queue: &Queue, texture_filename: &str) -> Self {
+    pub fn new(device: &Device, queue: &Queue, texture_as_bytes: &[u8]) -> Self {
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Buffer"),
             size: 0,
@@ -42,7 +71,7 @@ impl DrawBuffer {
             usage: BufferUsages::INDEX,
         });
         let (texture, texture_bind_group, texture_bind_group_layout) =
-            DrawBuffer::create_texture(device, queue, texture_filename);
+            DrawBuffer::create_texture(device, queue, texture_as_bytes);
         let instance_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("instance buffer"),
             size: 0,
@@ -65,9 +94,9 @@ impl DrawBuffer {
     pub fn create_texture(
         device: &Device,
         queue: &Queue,
-        file_name: &str,
+        bytes: &[u8],
     ) -> (Texture, BindGroup, BindGroupLayout) {
-        let image = image::open(file_name).expect("could not load texture");
+        let image = image::load_from_memory(bytes).expect("could not load texture");
         let rgba = image.to_rgba8();
         let dimensions = rgba.dimensions();
 
@@ -77,7 +106,7 @@ impl DrawBuffer {
             depth_or_array_layers: 1,
         };
         let tex = device.create_texture(&TextureDescriptor {
-            label: Some(&format!("Texture: {}", file_name)),
+            label: Some("texture"),
             size: texture_size,
             mip_level_count: 1,
             sample_count: 1,
@@ -148,12 +177,19 @@ impl DrawBuffer {
     }
 }
 
-pub struct DrawPass {
-    pub pipeline: RenderPipeline,
-    pub draw_buffer: DrawBuffer,
+pub struct ViewMatrix {
     pub matrix_bind_group: BindGroup,
     pub view_matrix_buffer: Buffer,
+}
+
+pub struct DrawPass {
+    pub prefix: String,
+    pub pipeline: RenderPipeline,
+    pub draw_buffer: DrawBuffer,
+    pub shader: ShaderModule,
+    pub view_matrix: Option<ViewMatrix>,
     pub topology: PrimitiveTopology,
+    pub instance_layout: VertexBufferLayout<'static>,
 }
 
 impl DrawPass {
@@ -162,25 +198,33 @@ impl DrawPass {
         device: &Device,
         queue: &Queue,
         draw_buffer: DrawBuffer,
-        shader: &ShaderModule,
+        shader: ShaderModule,
         camera: &mut Camera,
         topology: PrimitiveTopology,
+        instance_layout: VertexBufferLayout<'static>,
+        bcreate_viewmatrix: bool,
+        prefix: &str,
     ) -> Self {
-        let (pipeline, matrix_bind_group, view_matrix_buffer) = DrawPass::create_pipeline(
+        let (pipeline, view_matrix) = DrawPass::create_pipeline(
             device,
             queue,
             surface_config,
-            shader,
+            &shader,
             camera,
             topology,
             &draw_buffer.texture_bind_group_layout,
+            &instance_layout,
+            bcreate_viewmatrix,
+            &prefix,
         );
         DrawPass {
+            prefix: String::from(prefix),
             pipeline,
             draw_buffer,
-            matrix_bind_group,
-            view_matrix_buffer,
+            shader,
+            view_matrix,
             topology,
+            instance_layout,
         }
     }
 
@@ -192,15 +236,36 @@ impl DrawPass {
         camera: &mut Camera,
         primitive_topology: PrimitiveTopology,
         texture_bind_group_layout: &BindGroupLayout,
-    ) -> (RenderPipeline, BindGroup, Buffer) {
-        let (bind_group, transform_bind_group_layout, buffer) =
-            Self::create_view_matrix_bind_groups(device, queue, camera);
-
-        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("pipeline layout"),
-            bind_group_layouts: &[&transform_bind_group_layout, &texture_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        instance_layout: &VertexBufferLayout,
+        bcreate_viewmatrix: bool,
+        prefix: &str,
+    ) -> (RenderPipeline, Option<ViewMatrix>) {
+        let (view_matrix, pipeline_layout) = match bcreate_viewmatrix {
+            true => {
+                let (bind_group, transform_bind_group_layout, buffer) =
+                    Self::create_view_matrix_bind_groups(device, queue, camera);
+                let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some(&format!("{} pipeline layout", prefix)),
+                    bind_group_layouts: &[&transform_bind_group_layout, &texture_bind_group_layout],
+                    push_constant_ranges: &[],
+                });
+                (
+                    Some(ViewMatrix {
+                        matrix_bind_group: bind_group,
+                        view_matrix_buffer: buffer,
+                    }),
+                    pipeline_layout,
+                )
+            }
+            false => {
+                let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                    label: Some(&format!("{} pipeline layout", prefix)),
+                    bind_group_layouts: &[&texture_bind_group_layout],
+                    push_constant_ranges: &[],
+                });
+                (None, pipeline_layout)
+            }
+        };
 
         let vertex_layout = VertexBufferLayout {
             array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
@@ -208,17 +273,14 @@ impl DrawPass {
             attributes: &vertex_attr_array![0 => Float32x3, 1 => Float32x2],
         };
 
-        let instance_layout = INSTANCE_LAYOUT_PARTICLE;
-        // let instance_layout = INSTANCE_LAYOUT_POSITION;
-
         (
             device.create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("render pipeline"),
+                label: Some(&format!("{} render pipeline", prefix)),
                 layout: Some(&pipeline_layout),
                 vertex: VertexState {
                     module: shader,
                     entry_point: "vs_main",
-                    buffers: &[vertex_layout, instance_layout],
+                    buffers: &[vertex_layout, instance_layout.clone()],
                 },
                 fragment: Some(FragmentState {
                     module: shader,
@@ -240,22 +302,89 @@ impl DrawPass {
                         write_mask: ColorWrites::ALL,
                     })],
                 }),
-                // render lines
                 primitive: PrimitiveState {
                     topology: primitive_topology,
                     front_face: FrontFace::Cw,
                     ..Default::default()
                 },
-                depth_stencil: None,
+                depth_stencil: Some(DepthStencilState {
+                    format: TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: CompareFunction::LessEqual,
+                    stencil: StencilState::default(),
+                    bias: DepthBiasState::default(),
+                }),
                 // no multisample
                 multisample: MultisampleState {
                     ..Default::default()
                 },
                 multiview: None,
             }),
-            bind_group,
-            buffer,
+            view_matrix,
         )
+    }
+
+    pub fn from_object_and_texture(
+        surface_config: &SurfaceConfiguration,
+        device: &Device,
+        queue: &Queue,
+        shader_src: Cow<'static, str>,
+        obj_path: &str,
+        texture_bytes: &[u8],
+        camera: &mut Camera,
+        instance_layout: VertexBufferLayout<'static>,
+        bcreate_viewmatrix: bool,
+        prefix: &str,
+    ) -> DrawPass {
+        let cursor_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Renderer: wgsl cursor shader module"),
+            source: wgpu::ShaderSource::Wgsl(shader_src),
+        });
+        let draw_buffer_cursor = DrawBuffer::new(device, queue, texture_bytes);
+        let mut res = DrawPass::new(
+            surface_config,
+            device,
+            queue,
+            draw_buffer_cursor,
+            cursor_shader,
+            camera,
+            PrimitiveTopology::TriangleList,
+            instance_layout,
+            bcreate_viewmatrix,
+            prefix,
+        );
+        let cursor_obj =
+            tobj::load_obj(obj_path, &tobj::GPU_LOAD_OPTIONS).expect("could not load object");
+        let cursor_vertices: Vec<V3> = cursor_obj.0[0]
+            .mesh
+            .positions
+            .chunks(3)
+            .map(|c| V3::new(c[0], c[1], c[2]))
+            .collect();
+        let cursor_texture_coordinates: Vec<[f32; 2]> = cursor_obj.0[0]
+            .mesh
+            .texcoords
+            .chunks(2)
+            .map(|tc| [tc[0], tc[1]])
+            .collect();
+        let cursor_indices: Vec<u16> = cursor_obj.0[0]
+            .mesh
+            .indices
+            .iter()
+            .map(|i| *i as u16)
+            .collect();
+        res.update_vertex_buffer(
+            device,
+            &cursor_vertices
+                .iter()
+                .copied()
+                .zip(cursor_texture_coordinates)
+                .collect::<Vec<_>>(),
+        );
+        res.update_index_buffer(device, &cursor_indices);
+        // this puts up only a single instance at the origin
+        res.update_instance_buffer(device, &[0., 0., 0., 1.], 1);
+        res
     }
 
     pub fn recreate_pipeline(
@@ -263,21 +392,23 @@ impl DrawPass {
         surface_config: &SurfaceConfiguration,
         device: &Device,
         queue: &Queue,
-        shader: &ShaderModule,
         camera: &mut Camera,
     ) {
-        let (pipeline, bind_group, view_matrix_buffer) = DrawPass::create_pipeline(
+        let bcreate_viewmatrix = self.view_matrix.is_some();
+        let (pipeline, view_matrix) = DrawPass::create_pipeline(
             device,
             queue,
             surface_config,
-            shader,
+            &self.shader,
             camera,
             self.topology,
             &self.draw_buffer.texture_bind_group_layout,
+            &self.instance_layout,
+            bcreate_viewmatrix,
+            &self.prefix,
         );
         self.pipeline = pipeline;
-        self.matrix_bind_group = bind_group;
-        self.view_matrix_buffer = view_matrix_buffer;
+        self.view_matrix = view_matrix;
     }
 
     fn create_view_matrix_bind_groups(
@@ -328,9 +459,15 @@ impl DrawPass {
     }
 
     pub fn update_view_matrix(&mut self, queue: &Queue, camera: &mut Camera) {
-        let mx = camera.get_view_matrix();
-        let mx_ref: &[f32; 16] = mx.as_ref();
-        queue.write_buffer(&self.view_matrix_buffer, 0, bytemuck::cast_slice(mx_ref));
+        if let Some(ViewMatrix {
+            matrix_bind_group: _,
+            view_matrix_buffer,
+        }) = self.view_matrix.as_ref()
+        {
+            let mx = camera.get_view_matrix();
+            let mx_ref: &[f32; 16] = mx.as_ref();
+            queue.write_buffer(view_matrix_buffer, 0, bytemuck::cast_slice(mx_ref));
+        }
     }
 
     pub fn update_vertex_buffer(&mut self, device: &Device, vertices: &[(Vector3<f32>, [f32; 2])]) {
@@ -360,25 +497,33 @@ impl DrawPass {
         self.draw_buffer.index_buffer_length = indices.len();
     }
 
-    pub fn update_instance_buffer(&mut self, device: &Device, instances: &[Vector3<f32>]) {
-        let instance_floats = instances
-            .iter()
-            .map(|v| [v.x, v.y, v.z])
-            .collect::<Vec<[f32; 3]>>()
-            .concat();
+    pub fn update_instance_buffer(
+        &mut self,
+        device: &Device,
+        instance_floats: &[f32],
+        num_instances: usize,
+    ) {
         self.draw_buffer.instance_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Instance Buffer"),
                 contents: bytemuck::cast_slice(&instance_floats),
                 usage: BufferUsages::VERTEX,
             });
-        self.draw_buffer.instance_buffer_length = instances.len();
+        self.draw_buffer.instance_buffer_length = num_instances;
     }
 
     pub fn render<'a>(&'a self, rpass: &mut RenderPass<'a>) {
-        rpass.set_bind_group(0, &self.matrix_bind_group, &[]);
-        rpass.set_bind_group(1, &self.draw_buffer.texture_bind_group, &[]);
         rpass.set_pipeline(&self.pipeline);
+        if let Some(ViewMatrix {
+            matrix_bind_group,
+            view_matrix_buffer: _,
+        }) = self.view_matrix.as_ref()
+        {
+            rpass.set_bind_group(0, matrix_bind_group, &[]);
+            rpass.set_bind_group(1, &self.draw_buffer.texture_bind_group, &[]);
+        } else {
+            rpass.set_bind_group(0, &self.draw_buffer.texture_bind_group, &[]);
+        }
         rpass.set_vertex_buffer(0, self.draw_buffer.vertex_buffer.slice(..)); // slot 0
         rpass.set_index_buffer(self.draw_buffer.index_buffer.slice(..), IndexFormat::Uint16);
         rpass.set_vertex_buffer(1, self.draw_buffer.instance_buffer.slice(..));
@@ -396,9 +541,15 @@ impl DrawPass {
         instance_buffer: &'a Buffer,
         instance_buffer_length: usize,
     ) {
-        rpass.set_bind_group(0, &self.matrix_bind_group, &[]);
-        rpass.set_bind_group(1, &self.draw_buffer.texture_bind_group, &[]);
         rpass.set_pipeline(&self.pipeline);
+        if let Some(ViewMatrix {
+            matrix_bind_group,
+            view_matrix_buffer: _,
+        }) = self.view_matrix.as_ref()
+        {
+            rpass.set_bind_group(0, &matrix_bind_group, &[]);
+        }
+        rpass.set_bind_group(1, &self.draw_buffer.texture_bind_group, &[]);
         rpass.set_vertex_buffer(0, self.draw_buffer.vertex_buffer.slice(..)); // slot 0
         rpass.set_index_buffer(self.draw_buffer.index_buffer.slice(..), IndexFormat::Uint16);
         rpass.set_vertex_buffer(1, instance_buffer.slice(..));

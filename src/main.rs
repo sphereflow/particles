@@ -1,20 +1,25 @@
 use crate::camera::Direction;
-use bytemuck::{NoUninit, Pod, Zeroable};
-use cgmath::{Vector2, Vector3};
+use bytemuck::{Pod, Zeroable};
+use cgmath::Vector3;
 use compute::Compute;
-use poly3::*;
+use grid::{Bounds, Grid};
+use rand::random;
 use renderer::Renderer;
+use sim_params::*;
 use std::time::Instant;
 use wgpu::{Device, Queue, VertexAttribute, VertexBufferLayout, VertexStepMode};
 use winit::event::{ElementState, KeyboardInput, VirtualKeyCode};
 
 mod camera;
 mod compute;
+mod cursor;
 mod draw_pass;
 mod framework;
+mod grid;
 mod gui;
 mod poly3;
 mod renderer;
+mod sim_params;
 
 type V3 = Vector3<f32>;
 type Key = winit::event::VirtualKeyCode;
@@ -23,20 +28,21 @@ const fn zero_v3() -> V3 {
     V3::new(0., 0., 0.)
 }
 
+#[allow(dead_code)]
 fn rand_v3(max: f32) -> V3 {
     let res = V3::new(
-        rand::random::<f32>() - 0.5,
-        rand::random::<f32>() - 0.5,
-        rand::random::<f32>() - 0.5,
+        random::<f32>() - 0.5,
+        random::<f32>() - 0.5,
+        random::<f32>() - 0.5,
     );
     res * max
 }
 
 fn rand_v4(max: f32) -> [f32; 4] {
     [
-        max * rand::random::<f32>() - 0.5,
-        max * rand::random::<f32>() - 0.5,
-        max * rand::random::<f32>() - 0.5,
+        max * random::<f32>() - 0.5,
+        max * random::<f32>() - 0.5,
+        max * random::<f32>() - 0.5,
         1.0,
     ]
 }
@@ -77,7 +83,7 @@ struct Particle {
 }
 
 impl Particle {
-    const fn get_instance_layout() -> VertexBufferLayout<'static> {
+    const fn get_instance_layout() -> wgpu::VertexBufferLayout<'static> {
         let array_stride = std::mem::size_of::<Particle>() as u64;
         VertexBufferLayout {
             // particle_type : 4, position : 4 * 3, velocity: 4 * 3
@@ -103,10 +109,11 @@ impl Particle {
 
 struct ParticleSystem {
     particles: Vec<Particle>,
+    force_grid: Grid<V3>,
 }
 
 impl ParticleSystem {
-    fn new(max: V3, num_x: usize, num_y: usize, num_z: usize) -> Self {
+    fn new(max: V3, num_x: usize, num_y: usize, num_z: usize, sim_params: &SimParams) -> Self {
         let mut particles = Vec::with_capacity(num_x * num_y * num_z);
         for ix in 0..num_x {
             for iy in 0..num_y {
@@ -119,15 +126,29 @@ impl ParticleSystem {
                             (iz as f32 / num_z as f32) * max.z,
                             1.0,
                         ],
-                        vel: rand_v4(10.0).into(),
+                        vel: rand_v4(10.0),
                         ty: (index % 5) as u32,
                         _padd: [0; 3],
                     });
                 }
             }
         }
+        let bvr = sim_params.bounding_volume_radius;
+        let bounds = Bounds {
+            pos: V3::new(-bvr, -bvr, -bvr),
+            dir: V3::new(2.0 * bvr, 2.0 * bvr, 2.0 * bvr),
+        };
+        let force_grid = Grid::new_centered(
+            sim_params.vector_field_dimensions[0] as usize,
+            sim_params.vector_field_dimensions[1] as usize,
+            sim_params.vector_field_dimensions[2] as usize,
+            bounds,
+        );
 
-        ParticleSystem { particles }
+        ParticleSystem {
+            particles,
+            force_grid,
+        }
     }
 
     fn set_num_particles(&mut self, num_particles: usize) {
@@ -145,11 +166,14 @@ impl ParticleSystem {
         }
     }
 
-    fn get_instances(&self) -> Vec<V3> {
-        self.particles
-            .iter()
-            .map(|p| [p.pos[0], p.pos[1], p.pos[2]].into())
-            .collect()
+    fn get_instances(&self) -> (Vec<f32>, usize) {
+        (
+            self.particles
+                .iter()
+                .flat_map(|p| [p.pos[0], p.pos[1], p.pos[2], 1.])
+                .collect(),
+            self.particles.len(),
+        )
     }
 }
 
@@ -169,32 +193,6 @@ impl MassWrap {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, NoUninit, Zeroable)]
-struct SimParams {
-    attraction_force: [Poly7; 25],
-    particle_type_masses: [MassWrap; 5],
-    delta_t: f32,
-    max_velocity: f32,
-    bounding_sphere_radius: f32,
-    cut_off_distance: f32,
-    distance_exponent: f32,
-}
-
-impl SimParams {
-    fn new() -> Self {
-        SimParams {
-            attraction_force: [Poly7::new(); 25],
-            particle_type_masses: [MassWrap::new(1.0); 5],
-            delta_t: 0.,
-            max_velocity: 100.,
-            bounding_sphere_radius: 10.,
-            cut_off_distance: 1.0,
-            distance_exponent: 0.,
-        }
-    }
-}
-
 struct App {
     time_step: Instant,
     pub psys: ParticleSystem,
@@ -207,13 +205,32 @@ struct App {
 
 impl App {
     fn new(device: &Device, queue: &Queue, mut renderer: Renderer) -> Self {
-        let psys = ParticleSystem::new(V3::new(5.0, 2.0, 2.0), 10, 10, 10);
-        let compute = Compute::new(device, &psys.particles);
+        let sim_params = SimParams::new();
+        let psys = ParticleSystem::new(
+            V3::new(5.0, 2.0, 2.0),
+            sim_params.vector_field_dimensions[0] as usize,
+            sim_params.vector_field_dimensions[1] as usize,
+            sim_params.vector_field_dimensions[2] as usize,
+            &sim_params,
+        );
+        let compute = Compute::new(
+            device,
+            &psys.particles,
+            &psys.force_grid.get_force_vectors(),
+        );
+        dbg!(psys.force_grid.num_instances());
         renderer.recreate_pipelines(device, queue);
+        let vector_field_inst_raw = psys.force_grid.get_instances_raw(&[]);
+        dbg!(vector_field_inst_raw.len());
+        renderer.sub_rpass_vector_field.update_instance_buffer(
+            device,
+            &vector_field_inst_raw,
+            psys.force_grid.num_instances(),
+        );
         App {
             time_step: Instant::now(),
             psys,
-            sim_params: SimParams::new(),
+            sim_params,
             renderer,
             compute,
             speed: Some(1.0),
@@ -228,44 +245,66 @@ impl App {
             WindowEvent::KeyboardInput {
                 input:
                     KeyboardInput {
-                        virtual_keycode,
+                        virtual_keycode: Some(code),
                         state: ElementState::Pressed,
                         ..
                     },
                 ..
             } => {
-                if let Some(code) = virtual_keycode {
-                    if !self.pressed_keys.contains(code) {
-                        self.pressed_keys.push(*code);
-                    }
+                if !self.pressed_keys.contains(code) {
+                    self.pressed_keys.push(*code);
                 }
             }
 
             WindowEvent::KeyboardInput {
                 input:
                     KeyboardInput {
-                        virtual_keycode,
+                        virtual_keycode: Some(code),
                         state: ElementState::Released,
                         ..
                     },
                 ..
             } => {
-                if let Some(code) = virtual_keycode {
-                    self.pressed_keys.retain(|key| key != code);
-                }
+                self.pressed_keys.retain(|key| key != code);
             }
 
-            WindowEvent::CursorMoved { position, .. } => {}
+            WindowEvent::CursorMoved { position, .. } => {
+                self.renderer.camera.cursor.mouse_moved(
+                    position.x as f32,
+                    position.y as f32,
+                    &mut self.psys.force_grid,
+                );
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let scroll_dist = match delta {
+                    event::MouseScrollDelta::LineDelta(hor, ver) => {
+                        if hor.abs() > ver.abs() {
+                            *hor
+                        } else {
+                            *ver
+                        }
+                    }
+                    _ => 0.0,
+                };
+                self.renderer.camera.cursor.distance_from_camera += scroll_dist;
+            }
             WindowEvent::MouseInput {
                 state: event::ElementState::Pressed,
                 button: event::MouseButton::Left,
                 ..
-            } => {}
+            } => {
+                self.renderer
+                    .camera
+                    .cursor
+                    .mouse_down(&self.psys.force_grid);
+            }
             WindowEvent::MouseInput {
                 state: event::ElementState::Released,
                 button: event::MouseButton::Left,
                 ..
-            } => {}
+            } => {
+                self.renderer.camera.cursor.mouse_up();
+            }
             WindowEvent::MouseInput {
                 state: event::ElementState::Released,
                 button: event::MouseButton::Right,
@@ -286,9 +325,43 @@ impl App {
             self.sim_params.delta_t = 0.0;
         }
 
+        self.renderer.camera.update_cursor();
+        self.renderer
+            .camera
+            .cursor
+            .process_input(&self.pressed_keys);
+
         self.renderer
             .sub_rpass_triangles
             .update_view_matrix(queue, &mut self.renderer.camera);
+        self.renderer
+            .sub_rpass_cursor
+            .update_view_matrix(queue, &mut self.renderer.camera);
+        let p = self.renderer.camera.cursor.pos;
+        self.renderer
+            .sub_rpass_cursor
+            .update_instance_buffer(device, &[p.x, p.y, p.z, 1.0], 1);
+        self.renderer
+            .sub_rpass_vector_field
+            .update_view_matrix(queue, &mut self.renderer.camera);
+        self.compute.update_force_grid(
+            device,
+            &self
+                .psys
+                .force_grid
+                .get_instances()
+                .iter()
+                .map(|(_pos, dir)| [dir.x, dir.y, dir.z, 1.0])
+                .collect::<Vec<[f32; 4]>>(),
+        );
+        self.renderer.sub_rpass_vector_field.update_instance_buffer(
+            device,
+            &self
+                .psys
+                .force_grid
+                .get_instances_raw(&self.renderer.camera.cursor.modify_vector_indices),
+            self.psys.force_grid.num_instances(),
+        );
         self.compute.update_sim_params(device, &self.sim_params);
         for code in &self.pressed_keys {
             match code {
@@ -307,8 +380,14 @@ impl App {
                 Key::E => {
                     self.renderer.camera.motion(Direction::RotateRight, elapsed);
                 }
-                Key::U => {
+                Key::R => {
                     self.renderer.camera.motion(Direction::RotateLeft, elapsed);
+                }
+                Key::Up => {
+                    self.renderer.camera.motion(Direction::Forward, elapsed);
+                }
+                Key::Down => {
+                    self.renderer.camera.motion(Direction::Backward, elapsed);
                 }
                 _ => {}
             }

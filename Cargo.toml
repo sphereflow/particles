@@ -10,29 +10,38 @@ rayon = "1.8"
 wgpu = { version = "0.18", features = ["webgl"]}
 bytemuck = { version = "1.14", features = ["derive"] }
 log = "0.4"
-chrono = "0.4"
 egui = "0.24"
-eframe = "0.24"
 egui-wgpu = "0.24"
-egui-winit = "0.24"
+egui-winit = { version = "0.24", default-features = false }
 egui_plot = "0.24"
 winit = "0.28"
 cgmath = "0.18"
 instant = "0.1"
-image = "0.24"
+image = { version = "0.24", default-features = false, features = ["png", "jpeg"] }
 cfg-if = "1"
 rand = "0.8"
+tobj = "4"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-executor = "1.6"
+chrono = "0.4"
 pollster = "0.3"
 env_logger = "0.10"
+eframe = "0.24"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2.83"
-wasm-bindgen-futures = "0.4.31"
+wasm-bindgen = "0.2.89"
+wasm-bindgen-futures = "0.4"
 getrandom = { version = "0.2", features = ["js"] }
 console_error_panic_hook = "0.1.6"
 console_log = "0.1.2"
-web-sys = "0.3.60"
-js-sys = "0.3.60"
+chrono = { version = "0.4", default-features = false, features = [
+  "js-sys",
+  "wasmbind",
+] }
+eframe = { version = "0.24", default-features = false, features = [
+		"web_screen_reader",
+		"wgpu",
+] }
+web-sys = "0.3"
+js-sys = "0.3"

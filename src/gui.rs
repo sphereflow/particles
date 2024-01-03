@@ -88,12 +88,13 @@ impl Gui {
             Self::edit_view_distance(ui, app);
             Self::edit_camera_speed(ui, &mut app.renderer.camera);
             Self::edit_distance_exponent(ui, &mut app.sim_params);
+            Self::edit_bounding_volume_radius(ui, app);
         });
         ui.horizontal(|ui| {
             ui.separator();
             self.edit_masses(ui, &mut app.sim_params);
             ui.separator();
-            self.edit_polys(ui, &mut app.sim_params.attraction_force);
+            self.edit_polys(ui);
         });
         self.edit_poly(ui, &mut app.sim_params.attraction_force[self.poly_index]);
     }
@@ -103,10 +104,8 @@ impl Gui {
             if ui.button("pause").clicked() {
                 app.speed = None;
             }
-        } else {
-            if ui.button("play").clicked() {
-                app.speed = Some(1.0);
-            }
+        } else if ui.button("play").clicked() {
+            app.speed = Some(1.0);
         }
         if let Some(speed) = app.speed.as_mut() {
             ui.horizontal(|ui| {
@@ -119,7 +118,7 @@ impl Gui {
     fn edit_camera_speed(ui: &mut Ui, camera: &mut Camera) {
         ui.horizontal(|ui| {
             ui.label("camera speed");
-            ui.add(Slider::new(&mut camera.units_per_second, 0.3..=10.0).logarithmic(true));
+            ui.add(Slider::new(&mut camera.units_per_second, 2.0..=20.0).logarithmic(true));
         });
     }
 
@@ -139,7 +138,21 @@ impl Gui {
         });
     }
 
-    fn edit_polys(&mut self, ui: &mut Ui, polys: &mut [Poly7]) {
+    fn edit_bounding_volume_radius(ui: &mut Ui, app: &mut App) {
+        ui.horizontal(|ui| {
+            ui.label("bounding volume size :");
+            let mut val = app.sim_params.bounding_volume_radius * 2.0;
+            if ui.add(Slider::new(&mut val, 0.5..=10.0)).changed() {
+                app.sim_params.bounding_volume_radius = val * 0.5;
+                app.psys
+                    .force_grid
+                    .bounds
+                    .set_centered(app.sim_params.bounding_volume_radius * 2.0);
+            }
+        });
+    }
+
+    fn edit_polys(&mut self, ui: &mut Ui) {
         ui.vertical(|ui| {
             ui.colored_label(Color32::GREEN, "polynome selection matrix");
             for y in 0..5 {
@@ -162,12 +175,9 @@ impl Gui {
             let xs: [f32; 8] = std::array::from_fn(|i| (i as f32) / 7.0);
             let mut ys = xs.map(|x| poly.eval(x));
             let mut changed = false;
-            for i in 0..8 {
+            for y in ys.iter_mut() {
                 changed |= ui
-                    .add(
-                        Slider::new(&mut ys[i], -10.0..=10.0)
-                            .orientation(SliderOrientation::Vertical),
-                    )
+                    .add(Slider::new(y, -10.0..=10.0).orientation(SliderOrientation::Vertical))
                     .changed();
             }
             if changed {
