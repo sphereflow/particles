@@ -7,7 +7,7 @@ use rand::random;
 use renderer::Renderer;
 use sim_params::*;
 use std::time::Instant;
-use wgpu::{Device, Queue, VertexAttribute, VertexBufferLayout, VertexStepMode};
+use wgpu::{VertexAttribute, VertexBufferLayout, VertexStepMode};
 use winit::event::{ElementState, KeyboardInput, VirtualKeyCode};
 
 mod camera;
@@ -204,7 +204,7 @@ struct App {
 }
 
 impl App {
-    fn new(device: &Device, queue: &Queue, mut renderer: Renderer) -> Self {
+    fn new(mut renderer: Renderer) -> Self {
         let sim_params = SimParams::new();
         let psys = ParticleSystem::new(
             V3::new(5.0, 2.0, 2.0),
@@ -214,16 +214,16 @@ impl App {
             &sim_params,
         );
         let compute = Compute::new(
-            device,
+            &renderer.device,
             &psys.particles,
             &psys.force_grid.get_force_vectors(),
         );
         dbg!(psys.force_grid.num_instances());
-        renderer.recreate_pipelines(device, queue);
+        renderer.recreate_pipelines();
         let vector_field_inst_raw = psys.force_grid.get_instances_raw(&[]);
         dbg!(vector_field_inst_raw.len());
         renderer.sub_rpass_vector_field.update_instance_buffer(
-            device,
+            &renderer.device,
             &vector_field_inst_raw,
             psys.force_grid.num_instances(),
         );
@@ -314,7 +314,7 @@ impl App {
         }
     }
 
-    fn update(&mut self, device: &Device, queue: &Queue) {
+    fn update(&mut self) {
         // get time step
         let elapsed = self.time_step.elapsed().as_secs_f32();
         self.time_step = Instant::now();
@@ -333,19 +333,19 @@ impl App {
 
         self.renderer
             .sub_rpass_triangles
-            .update_view_matrix(queue, &mut self.renderer.camera);
+            .update_view_matrix(&self.renderer.queue, &mut self.renderer.camera);
         self.renderer
             .sub_rpass_cursor
-            .update_view_matrix(queue, &mut self.renderer.camera);
+            .update_view_matrix(&self.renderer.queue, &mut self.renderer.camera);
         let p = self.renderer.camera.cursor.pos;
         self.renderer
             .sub_rpass_cursor
-            .update_instance_buffer(device, &[p.x, p.y, p.z, 1.0], 1);
+            .update_instance_buffer(&self.renderer.device, &[p.x, p.y, p.z, 1.0], 1);
         self.renderer
             .sub_rpass_vector_field
-            .update_view_matrix(queue, &mut self.renderer.camera);
+            .update_view_matrix(&self.renderer.queue, &mut self.renderer.camera);
         self.compute.update_force_grid(
-            device,
+            &self.renderer.device,
             &self
                 .psys
                 .force_grid
@@ -355,14 +355,14 @@ impl App {
                 .collect::<Vec<[f32; 4]>>(),
         );
         self.renderer.sub_rpass_vector_field.update_instance_buffer(
-            device,
+            &self.renderer.device,
             &self
                 .psys
                 .force_grid
                 .get_instances_raw(&self.renderer.camera.cursor.modify_vector_indices),
             self.psys.force_grid.num_instances(),
         );
-        self.compute.update_sim_params(device, &self.sim_params);
+        self.compute.update_sim_params(&self.renderer.device, &self.sim_params);
         for code in &self.pressed_keys {
             match code {
                 Key::W => {

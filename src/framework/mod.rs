@@ -185,8 +185,8 @@ fn start(
 
     log::info!("Initializing the example...");
     let mut gui = Gui::new(&window, &event_loop);
-    let renderer = Renderer::init(&surface_config, &device, &queue);
-    let mut app = App::new(&device, &queue, renderer);
+    let renderer = Renderer::init(&surface_config, device, queue);
+    let mut app = App::new(renderer);
     let context = egui::Context::default();
     context.set_pixels_per_point(window.scale_factor() as f32);
 
@@ -198,7 +198,7 @@ fn start(
         } else {
             ControlFlow::Poll
         };
-        app.update(&device, &queue);
+        app.update();
 
         match event {
             event::Event::RedrawEventsCleared => {
@@ -214,11 +214,10 @@ fn start(
                 ..
             } => {
                 log::info!("Resizing to {:?}", size);
-                println!("Resized: {:?}", size);
                 surface_config.width = size.width.max(1);
                 surface_config.height = size.height.max(1);
-                surface.configure(&device, &surface_config);
-                app.renderer.resize(&surface_config, &device, &queue);
+                surface.configure(&app.renderer.device, &surface_config);
+                app.renderer.resize(&surface_config);
             }
             event::Event::WindowEvent { event, .. } => match event {
                 WindowEvent::CloseRequested => {
@@ -234,19 +233,17 @@ fn start(
                 let frame = match surface.get_current_texture() {
                     Ok(frame) => frame,
                     Err(_) => {
-                        surface.configure(&device, &surface_config);
+                        surface.configure(&app.renderer.device, &surface_config);
                         surface
                             .get_current_texture()
                             .expect("Failed to acquire next swap chain texture!")
                     }
                 };
 
-                let output = gui.update(&context, &window, &device, &mut app);
+                let output = gui.update(&context, &window, &mut app);
 
                 app.renderer.render(
                     &frame,
-                    &device,
-                    &queue,
                     output,
                     &mut app.compute,
                     &context,
@@ -263,7 +260,7 @@ fn start(
         }
         let (instances_raw, num_instances) = app.psys.get_instances();
         app.renderer.sub_rpass_triangles.update_instance_buffer(
-            &device,
+            &app.renderer.device,
             &instances_raw,
             num_instances,
         );

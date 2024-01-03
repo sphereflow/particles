@@ -127,7 +127,7 @@ impl DrawBuffer {
         );
         let tex_view = tex.create_view(&TextureViewDescriptor::default());
         let (bind_group, bind_group_layout) =
-            DrawBuffer::create_texture_bind_group(&device, &tex_view);
+            DrawBuffer::create_texture_bind_group(device, &tex_view);
         (tex, bind_group, bind_group_layout)
     }
 
@@ -215,7 +215,7 @@ impl DrawPass {
             &draw_buffer.texture_bind_group_layout,
             &instance_layout,
             bcreate_viewmatrix,
-            &prefix,
+            prefix,
         );
         DrawPass {
             prefix: String::from(prefix),
@@ -474,7 +474,7 @@ impl DrawPass {
         let vertex_data: Vec<Vertex> = vertices
             .iter()
             .map(|(p, tex_coord)| Vertex {
-                _pos: [p.x as f32, p.y as f32, p.z as f32],
+                _pos: [p.x, p.y, p.z],
                 _tex_coord: *tex_coord,
             })
             .collect();
@@ -491,7 +491,7 @@ impl DrawPass {
         self.draw_buffer.index_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&indices),
+                contents: bytemuck::cast_slice(indices),
                 usage: BufferUsages::INDEX,
             });
         self.draw_buffer.index_buffer_length = indices.len();
@@ -506,7 +506,7 @@ impl DrawPass {
         self.draw_buffer.instance_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Instance Buffer"),
-                contents: bytemuck::cast_slice(&instance_floats),
+                contents: bytemuck::cast_slice(instance_floats),
                 usage: BufferUsages::VERTEX,
             });
         self.draw_buffer.instance_buffer_length = num_instances;
@@ -547,7 +547,7 @@ impl DrawPass {
             view_matrix_buffer: _,
         }) = self.view_matrix.as_ref()
         {
-            rpass.set_bind_group(0, &matrix_bind_group, &[]);
+            rpass.set_bind_group(0, matrix_bind_group, &[]);
         }
         rpass.set_bind_group(1, &self.draw_buffer.texture_bind_group, &[]);
         rpass.set_vertex_buffer(0, self.draw_buffer.vertex_buffer.slice(..)); // slot 0

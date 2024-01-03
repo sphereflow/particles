@@ -22,7 +22,6 @@ impl Gui {
         &mut self,
         ctx: &Context,
         winit_window: &winit::window::Window,
-        device: &Device,
         app: &mut App,
     ) -> FullOutput {
         let input = self.winit_state.take_egui_input(winit_window);
@@ -39,7 +38,7 @@ impl Gui {
                         mouse_pos.x, mouse_pos.y
                     ));
                 }
-                self.main(ui, device, app);
+                self.main(ui, app);
 
                 let elapsed = self.last_update_inst.elapsed();
                 ui.label(format!("Frametime: {:.2?}", elapsed));
@@ -76,11 +75,11 @@ impl Gui {
         }
     }
 
-    fn main(&mut self, ui: &mut Ui, device: &Device, app: &mut App) {
+    fn main(&mut self, ui: &mut Ui, app: &mut App) {
         let mut num_particles = app.psys.particles.len();
         if ui.add(Slider::new(&mut num_particles, 1..=50000)).changed() {
             app.psys.set_num_particles(num_particles);
-            app.compute.upload_particles(device, &app.psys.particles)
+            app.compute.upload_particles(&app.renderer.device, &app.psys.particles)
         }
         ui.vertical_centered_justified(|ui| {
             Self::edit_time_controls(ui, app);

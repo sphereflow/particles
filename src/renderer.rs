@@ -23,6 +23,8 @@ pub struct Renderer {
     pub sub_rpass_triangles: DrawPass,
     pub sub_rpass_cursor: DrawPass,
     pub sub_rpass_vector_field: DrawPass,
+    pub device: Device,
+    pub queue: Queue,
     egui_rpass: egui_wgpu::renderer::Renderer,
     surface_config: SurfaceConfiguration,
     pub camera: Camera,
@@ -35,8 +37,8 @@ pub struct Renderer {
 impl Renderer {
     pub fn init(
         surface_config: &SurfaceConfiguration,
-        device: &Device,
-        queue: &Queue, // we might need to meddle with the command queue
+        device: Device,
+        queue: Queue, // we might need to meddle with the command queue
     ) -> Self {
         use std::borrow::Cow;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -52,12 +54,12 @@ impl Renderer {
 
         let texture_as_bytes = include_bytes!("../assets/all_textures.png");
 
-        let draw_buffer = DrawBuffer::new(device, queue, texture_as_bytes);
+        let draw_buffer = DrawBuffer::new(&device, &queue, texture_as_bytes);
 
         let mut sub_rpass_particles = DrawPass::new(
             surface_config,
-            device,
-            queue,
+            &device,
+            &queue,
             draw_buffer,
             shader,
             &mut camera,
@@ -72,7 +74,7 @@ impl Renderer {
         let d = 0.01;
         let md = -0.01;
         sub_rpass_particles.update_vertex_buffer(
-            device,
+            &device,
             &[
                 (Vector3::new(md, d, d), [0.0, 1.0]),
                 (Vector3::new(d, d, d), [1.0, 1.0]),
@@ -80,13 +82,13 @@ impl Renderer {
                 (Vector3::new(d, md, d), [1.0, 0.0]),
             ],
         );
-        sub_rpass_particles.update_index_buffer(device, &[0, 1, 2, 1, 2, 3]);
+        sub_rpass_particles.update_index_buffer(&device, &[0, 1, 2, 1, 2, 3]);
 
         let cursor_texture_bytes = include_bytes!("../assets/cursor.png");
         let sub_rpass_cursor = DrawPass::from_object_and_texture(
             surface_config,
-            device,
-            queue,
+            &device,
+            &queue,
             Cow::Borrowed(include_str!("cursor_shader.wgsl")),
             "./assets/cursor.obj",
             cursor_texture_bytes,
@@ -99,8 +101,8 @@ impl Renderer {
         let vector_texture_bytes = include_bytes!("../assets/vector.png");
         let sub_rpass_vector_field = DrawPass::from_object_and_texture(
             surface_config,
-            device,
-            queue,
+            &device,
+            &queue,
             Cow::Borrowed(include_str!("vector_field_shader.wgsl")),
             "./assets/vector.obj",
             vector_texture_bytes,
@@ -110,16 +112,18 @@ impl Renderer {
             "vector field",
         );
 
-        let egui_rpass = egui_wgpu::renderer::Renderer::new(device, surface_config.format, None, 1);
+        let egui_rpass = egui_wgpu::renderer::Renderer::new(&device, surface_config.format, None, 1);
 
         let (depth_texture, depth_view, depth_sampler) =
-            Self::create_depth_texture(device, surface_config);
+            Self::create_depth_texture(&device, surface_config);
 
         Renderer {
             sub_rpass_triangles: sub_rpass_particles,
             sub_rpass_cursor,
             sub_rpass_vector_field,
             egui_rpass,
+            device,
+            queue,
             surface_config: surface_config.clone(),
             camera,
             depth_texture,
@@ -129,18 +133,18 @@ impl Renderer {
         }
     }
 
-    pub fn recreate_pipelines(&mut self, device: &Device, queue: &Queue) {
+    pub fn recreate_pipelines(&mut self) {
         self.recreate_pipelines = false;
         self.sub_rpass_triangles.recreate_pipeline(
             &self.surface_config,
-            device,
-            queue,
+            &self.device,
+            &self.queue,
             &mut self.camera,
         );
         self.sub_rpass_cursor.recreate_pipeline(
             &self.surface_config,
-            device,
-            queue,
+            &self.device,
+            &self.queue,
             &mut self.camera,
         );
     }
@@ -185,25 +189,21 @@ impl Renderer {
     pub fn resize(
         &mut self,
         surface_config: &SurfaceConfiguration,
-        device: &Device,
-        queue: &Queue,
     ) {
         self.surface_config = surface_config.clone();
         let (depth_texture, depth_view, depth_sampler) =
-            Self::create_depth_texture(device, surface_config);
+            Self::create_depth_texture(&self.device, surface_config);
         self.depth_texture = depth_texture;
         self.depth_view = depth_view;
         self.depth_sampler = depth_sampler;
         self.camera
             .resize(surface_config.width as f32, surface_config.height as f32);
-        self.recreate_pipelines(device, queue);
+        self.recreate_pipelines();
     }
 
     pub fn render(
         &mut self,
         frame: &SurfaceTexture,
-        device: &Device,
-        queue: &Queue,
         output: FullOutput,
         compute: &mut Compute,
         context: &egui::Context,
@@ -211,7 +211,7 @@ impl Renderer {
     ) {
         //self.sub_rpass_triangles
         //    .update_vertex_buffer(device, &render_result.triangles);
-        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("Command Encoder"),
         });
         {
@@ -263,15 +263,15 @@ impl Renderer {
             };
             for (id, image_delta) in &output.textures_delta.set {
                 self.egui_rpass
-                    .update_texture(device, queue, *id, image_delta);
+                    .update_texture(&self.device, &self.queue, *id, image_delta);
             }
             for id in &output.textures_delta.free {
                 self.egui_rpass.free_texture(id);
             }
 
             self.egui_rpass.update_buffers(
-                device,
-                queue,
+                &self.device,
+                &self.queue,
                 &mut encoder,
                 &clipped_primitives,
                 &screen_descriptor,
@@ -296,6 +296,6 @@ impl Renderer {
                 .render(&mut rpass, &clipped_primitives, &screen_descriptor);
         }
 
-        queue.submit(Some(encoder.finish()));
+        self.queue.submit(Some(encoder.finish()));
     }
 }
