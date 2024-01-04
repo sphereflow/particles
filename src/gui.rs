@@ -3,12 +3,13 @@ use egui::*;
 use egui_plot::{Line, Plot};
 use instant::Instant;
 
-use crate::{camera::Camera, poly7::Poly7, App, SimParams};
+use crate::{camera::Camera, poly7::Poly7, App, SimParams, cursor::Falloff, grid::Grid};
 
 pub struct Gui {
     pub winit_state: egui_winit::State,
     pub scale_factor: f32,
     pub exit_app: bool,
+    gui_mode: GuiMode,
     element_text: [String; 5],
     last_update_inst: Instant,
     last_cursor: Option<Pos2>,
@@ -17,6 +18,32 @@ pub struct Gui {
 }
 
 impl Gui {
+    pub fn new(
+        winit_window: &winit::window::Window,
+        event_loop: &winit::event_loop::EventLoop<()>,
+    ) -> Self {
+        let last_update_inst = Instant::now();
+        let winit_state = egui_winit::State::new(ViewportId::ROOT, event_loop, None, None);
+        let element_text = [
+            String::from("Earth"),
+            String::from("Water"),
+            String::from("Fire"),
+            String::from("Air"),
+            String::from("Ether"),
+        ];
+        Gui {
+            winit_state,
+            gui_mode: GuiMode::Main,
+            scale_factor: winit_window.scale_factor() as f32,
+            last_update_inst,
+            last_cursor: None,
+            exit_app: false,
+            element_text,
+            poly_index: 0,
+            copy_poly: None,
+        }
+    }
+
     pub fn update(
         &mut self,
         ctx: &Context,
@@ -37,7 +64,10 @@ impl Gui {
                         mouse_pos.x, mouse_pos.y
                     ));
                 }
-                self.main(ui, app);
+                match self.gui_mode {
+                    GuiMode::Main => self.main(ui, app),
+                    GuiMode::Cursor => self.vector_field(ui, app),
+                }
 
                 let elapsed = self.last_update_inst.elapsed();
                 ui.label(format!("Frametime: {:.2?}", elapsed));
@@ -46,45 +76,62 @@ impl Gui {
         self.last_update_inst = Instant::now();
         ctx.end_frame()
     }
-}
 
-impl Gui {
-    pub fn new(
-        winit_window: &winit::window::Window,
-        event_loop: &winit::event_loop::EventLoop<()>,
-    ) -> Self {
-        let last_update_inst = Instant::now();
-        let winit_state = egui_winit::State::new(ViewportId::ROOT, event_loop, None, None);
-        let element_text = [
-            String::from("Earth"),
-            String::from("Water"),
-            String::from("Fire"),
-            String::from("Air"),
-            String::from("Ether"),
-        ];
-        Gui {
-            winit_state,
-            scale_factor: winit_window.scale_factor() as f32,
-            last_update_inst,
-            last_cursor: None,
-            exit_app: false,
-            element_text,
-            poly_index: 0,
-            copy_poly: None,
+    fn vector_field(&mut self, ui: &mut Ui, app: &mut App) {
+        let cursor = &mut app.renderer.camera.cursor;
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "Position: ({}, {}, {})",
+                cursor.pos.x, cursor.pos.y, cursor.pos.z
+            ));
+        });
+        if ui.button("center vector field").clicked() {
+            app.psys.force_grid = app.sim_params.new_force_grid_centered();
+        }
+        if ui.button("zero vector field").clicked() {
+            app.psys.force_grid = app.sim_params.new_force_grid_zero();
+        }
+        ui.horizontal(|ui| {
+            ui.label("radius: ");
+            ui.add(Slider::new(&mut cursor.outer_radius, 0.1..=10.0));
+        });
+        ui.horizontal(|ui| {
+            ui.label("cursor camera distance: ");
+            ui.add(Slider::new(&mut cursor.distance_from_camera, 0.1..=10.0));
+        });
+        ui.horizontal(|ui| {
+            ui.label("edit strength: ");
+            ui.add(Slider::new(&mut cursor.edit_mode.strength, 0.1..=10.0));
+        });
+        ui.label("selection fall off");
+        ui.horizontal(|ui| {
+            ui.label("falloff dist");
+            ui.add(Slider::new(&mut cursor.edit_mode.falloff_dist, 1.0..= 10.0));
+        });
+        ui.selectable_value(&mut cursor.edit_mode.falloff, Falloff::Abrupt, "step");
+        ui.selectable_value(&mut cursor.edit_mode.falloff, Falloff::Linear, "linear");
+        ui.selectable_value(&mut cursor.edit_mode.falloff, Falloff::InverseDistance, "inverse distance");
+        if ui.button("back to main menu").clicked() {
+            self.gui_mode = GuiMode::Main;
         }
     }
 
     fn main(&mut self, ui: &mut Ui, app: &mut App) {
+        if ui.button("Edit Cursor").clicked() {
+            self.gui_mode = GuiMode::Cursor;
+        }
         let mut num_particles = app.psys.particles.len();
         if ui.add(Slider::new(&mut num_particles, 1..=50000)).changed() {
             app.psys.set_num_particles(num_particles);
-            app.compute.upload_particles(&app.renderer.device, &app.psys.particles)
+            app.compute
+                .upload_particles(&app.renderer.device, &app.psys.particles)
         }
         ui.vertical_centered_justified(|ui| {
             Self::edit_time_controls(ui, app);
             self.edit_cutoff(ui, &mut app.sim_params);
             Self::edit_view_distance(ui, app);
             Self::edit_camera_speed(ui, &mut app.renderer.camera);
+            Self::edit_max_velocity(ui, &mut app.sim_params);
             Self::edit_distance_exponent(ui, &mut app.sim_params);
             Self::edit_bounding_volume_radius(ui, app);
         });
@@ -127,6 +174,13 @@ impl Gui {
                 ui.add(Slider::new(distance, 0.1..=20.0).logarithmic(true));
             });
         }
+    }
+
+    fn edit_max_velocity(ui: &mut Ui, sim_params: &mut SimParams) {
+        ui.horizontal(|ui| {
+            ui.label("max velocity: ");
+            ui.add(Slider::new(&mut sim_params.max_velocity, 0.1..=100.0).logarithmic(true));
+        });
     }
 
     fn edit_distance_exponent(ui: &mut Ui, sim_params: &mut SimParams) {
@@ -246,4 +300,9 @@ impl Gui {
             ui.add(Slider::new(&mut sim_params.cut_off_distance, 0.1..=5.0));
         });
     }
+}
+
+enum GuiMode {
+    Main,
+    Cursor,
 }

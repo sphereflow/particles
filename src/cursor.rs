@@ -122,29 +122,33 @@ impl Cursor {
     }
 }
 
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
 pub enum EditModeE {
     Centered,
     Shift,
     Rotate,
 }
 
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
 pub enum RelAbE {
     Relative,
     Absolute,
 }
 
+#[derive(Eq, PartialEq, Debug, Clone, Copy)]
 pub enum Falloff {
     Abrupt,
     Linear,
     InverseDistance,
 }
 
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub struct EditMode {
-    mode: EditModeE,
-    ra: RelAbE,
-    falloff: Falloff,
-    falloff_dist: f32,
-    strength: f32,
+    pub mode: EditModeE,
+    pub ra: RelAbE,
+    pub falloff: Falloff,
+    pub falloff_dist: f32,
+    pub strength: f32,
 }
 
 impl EditMode {
@@ -185,7 +189,7 @@ impl EditMode {
                 let factor = mag / self.falloff_dist;
                 (1.0 - factor) * res
             }
-            Falloff::InverseDistance => (self.falloff_dist / res_len) * res,
+            Falloff::InverseDistance => (self.falloff_dist / (res_len + 1.0)) * res,
         };
         res * self.strength
     }

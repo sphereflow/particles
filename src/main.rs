@@ -139,9 +139,9 @@ impl ParticleSystem {
             dir: V3::new(2.0 * bvr, 2.0 * bvr, 2.0 * bvr),
         };
         let force_grid = Grid::new_centered(
-            sim_params.vector_field_dimensions[0] as usize,
-            sim_params.vector_field_dimensions[1] as usize,
-            sim_params.vector_field_dimensions[2] as usize,
+            sim_params.force_grid_dimensions[0] as usize,
+            sim_params.force_grid_dimensions[1] as usize,
+            sim_params.force_grid_dimensions[2] as usize,
             bounds,
         );
 
@@ -208,9 +208,9 @@ impl App {
         let sim_params = SimParams::new();
         let psys = ParticleSystem::new(
             V3::new(5.0, 2.0, 2.0),
-            sim_params.vector_field_dimensions[0] as usize,
-            sim_params.vector_field_dimensions[1] as usize,
-            sim_params.vector_field_dimensions[2] as usize,
+            sim_params.force_grid_dimensions[0] as usize,
+            sim_params.force_grid_dimensions[1] as usize,
+            sim_params.force_grid_dimensions[2] as usize,
             &sim_params,
         );
         let compute = Compute::new(

@@ -145,17 +145,19 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
 
     // apply force grid
     let fgi = force_grid_index(params.bounding_volume_radius * 2.0, params.vector_field_dimensions, vPos);
-    cAcc += 100.0 * force_grid[fgi].xyz / vMass;
+    cAcc += 10.0 * force_grid[fgi].xyz / vMass;
 
     // deceleration
-    cAcc -= vVel * 0.1;
+    vVel = vVel * exp(-params.deltaT);
 
     // let cAcc = cForce / params.particle_type_masses[vParticleType].mass;
     vVel += cAcc * params.deltaT;
 
     // clamp velocity for a more pleasing simulation
     let vel = length(vVel);
-    vVel = normalize(vVel) * clamp(vel, 0.0, params.max_velocity);
+    if vel > 0.001 {
+      vVel = normalize(vVel) * clamp(vel, 0.0, params.max_velocity);
+    }
 
     // kinematic update
     vPos += vVel * params.deltaT;
