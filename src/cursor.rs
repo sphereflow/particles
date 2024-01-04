@@ -92,7 +92,7 @@ impl Cursor {
                     v_pos_dir[*ix].0,
                     md_pos,
                     self.pos,
-                    cam_dir,
+                    self.rot,
                 );
                 // grid.grid[*ix] = self.pos - md_pos;
                 match self.edit_mode.ra {
@@ -156,8 +156,17 @@ impl EditMode {
     /// v_pos: the position of the vector to be editted
     /// md_pos: the 3d coordinates of the mouse when it was clicked
     /// cursor_pos: the current location of the cursor
-    fn get_vector(&self, v: V3, v_pos: V3, md_pos: V3, cursor_pos: V3, cam_dir: V3) -> V3 {
+    fn get_vector(
+        &self,
+        v: V3,
+        v_pos: V3,
+        md_pos: V3,
+        cursor_pos: V3,
+        cam_rot: Matrix3<f32>,
+    ) -> V3 {
         let mut res;
+        let cam_dir = cam_rot.z;
+        let cam_right = cam_rot.x;
         match self.mode {
             EditModeE::Centered => {
                 // a unit vector points to cursor_pos
@@ -177,7 +186,7 @@ impl EditMode {
                     // direction of the vectors position
                     let dv = (v_pos - md_pos).normalize();
                     let dir = dv.cross(cam_dir);
-                    res = dir * dc.x;
+                    res = dir * dc.dot(cam_right);
                 }
             }
         }
