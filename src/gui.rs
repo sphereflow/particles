@@ -3,7 +3,7 @@ use egui::*;
 use egui_plot::{Line, Plot};
 use instant::Instant;
 
-use crate::{camera::Camera, poly7::Poly7, App, SimParams, cursor::Falloff, grid::Grid};
+use crate::{camera::Camera, cursor::Falloff, poly7::Poly7, App, SimParams};
 
 pub struct Gui {
     pub winit_state: egui_winit::State,
@@ -106,11 +106,15 @@ impl Gui {
         ui.label("selection fall off");
         ui.horizontal(|ui| {
             ui.label("falloff dist");
-            ui.add(Slider::new(&mut cursor.edit_mode.falloff_dist, 1.0..= 10.0));
+            ui.add(Slider::new(&mut cursor.edit_mode.falloff_dist, 1.0..=10.0));
         });
         ui.selectable_value(&mut cursor.edit_mode.falloff, Falloff::Abrupt, "step");
         ui.selectable_value(&mut cursor.edit_mode.falloff, Falloff::Linear, "linear");
-        ui.selectable_value(&mut cursor.edit_mode.falloff, Falloff::InverseDistance, "inverse distance");
+        ui.selectable_value(
+            &mut cursor.edit_mode.falloff,
+            Falloff::InverseDistance,
+            "inverse distance",
+        );
         if ui.button("back to main menu").clicked() {
             self.gui_mode = GuiMode::Main;
         }

@@ -4,7 +4,7 @@ use std::mem;
 use crate::camera::Camera;
 use crate::renderer::Vertex;
 use crate::{Particle, V3};
-use cgmath::Vector3;
+use cgmath::{Matrix, Matrix4, Vector3};
 use wgpu::util::DeviceExt;
 use wgpu::*;
 
@@ -38,7 +38,7 @@ pub const INSTANCE_LAYOUT_VECTOR_FIELD: VertexBufferLayout = VertexBufferLayout 
             format: VertexFormat::Float32x4,
             offset: 32,
             shader_location: 4,
-        }
+        },
     ],
 };
 
@@ -177,17 +177,19 @@ impl DrawBuffer {
     }
 }
 
-pub struct ViewMatrix {
-    pub matrix_bind_group: BindGroup,
-    pub view_matrix_buffer: Buffer,
+pub struct MatrixBindGroup {
+    pub layout: BindGroupLayout,
+    pub bind_group: BindGroup,
+    pub view_matrix: Option<Buffer>,
+    pub camera_rotation_matrix: Option<Buffer>,
 }
 
 pub struct DrawPass {
     pub prefix: String,
     pub pipeline: RenderPipeline,
     pub draw_buffer: DrawBuffer,
+    pub matrix_bind_group: Option<MatrixBindGroup>,
     pub shader: ShaderModule,
-    pub view_matrix: Option<ViewMatrix>,
     pub topology: PrimitiveTopology,
     pub instance_layout: VertexBufferLayout<'static>,
 }
@@ -203,9 +205,10 @@ impl DrawPass {
         topology: PrimitiveTopology,
         instance_layout: VertexBufferLayout<'static>,
         bcreate_viewmatrix: bool,
+        bcreate_camera_rotation: bool,
         prefix: &str,
     ) -> Self {
-        let (pipeline, view_matrix) = DrawPass::create_pipeline(
+        let (pipeline, matrix_bind_group) = DrawPass::create_pipeline(
             device,
             queue,
             surface_config,
@@ -215,14 +218,15 @@ impl DrawPass {
             &draw_buffer.texture_bind_group_layout,
             &instance_layout,
             bcreate_viewmatrix,
+            bcreate_camera_rotation,
             prefix,
         );
         DrawPass {
             prefix: String::from(prefix),
             pipeline,
             draw_buffer,
+            matrix_bind_group,
             shader,
-            view_matrix,
             topology,
             instance_layout,
         }
@@ -238,34 +242,29 @@ impl DrawPass {
         texture_bind_group_layout: &BindGroupLayout,
         instance_layout: &VertexBufferLayout,
         bcreate_viewmatrix: bool,
+        bcreate_camera_rotation: bool,
         prefix: &str,
-    ) -> (RenderPipeline, Option<ViewMatrix>) {
-        let (view_matrix, pipeline_layout) = match bcreate_viewmatrix {
-            true => {
-                let (bind_group, transform_bind_group_layout, buffer) =
-                    Self::create_view_matrix_bind_groups(device, queue, camera);
-                let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                    label: Some(&format!("{} pipeline layout", prefix)),
-                    bind_group_layouts: &[&transform_bind_group_layout, &texture_bind_group_layout],
-                    push_constant_ranges: &[],
-                });
-                (
-                    Some(ViewMatrix {
-                        matrix_bind_group: bind_group,
-                        view_matrix_buffer: buffer,
-                    }),
-                    pipeline_layout,
-                )
-            }
-            false => {
-                let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                    label: Some(&format!("{} pipeline layout", prefix)),
-                    bind_group_layouts: &[&texture_bind_group_layout],
-                    push_constant_ranges: &[],
-                });
-                (None, pipeline_layout)
-            }
-        };
+    ) -> (RenderPipeline, Option<MatrixBindGroup>) {
+        let mut bind_group_layouts = Vec::new();
+        let matrix_bind_group = Self::create_matrix_bind_group(
+            device,
+            queue,
+            camera,
+            bcreate_viewmatrix,
+            bcreate_camera_rotation,
+        );
+
+        if let Some(mbg) = matrix_bind_group.as_ref() {
+            bind_group_layouts.push(&mbg.layout);
+        }
+
+        bind_group_layouts.push(texture_bind_group_layout);
+        dbg!(&bind_group_layouts);
+        let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some(&format!("{} pipeline layout", prefix)),
+            bind_group_layouts: &bind_group_layouts,
+            push_constant_ranges: &[],
+        });
 
         let vertex_layout = VertexBufferLayout {
             array_stride: mem::size_of::<Vertex>() as wgpu::BufferAddress,
@@ -320,7 +319,7 @@ impl DrawPass {
                 },
                 multiview: None,
             }),
-            view_matrix,
+            matrix_bind_group,
         )
     }
 
@@ -334,54 +333,50 @@ impl DrawPass {
         camera: &mut Camera,
         instance_layout: VertexBufferLayout<'static>,
         bcreate_viewmatrix: bool,
+        bcreate_camera_rotation: bool,
         prefix: &str,
     ) -> DrawPass {
-        let cursor_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Renderer: wgsl cursor shader module"),
             source: wgpu::ShaderSource::Wgsl(shader_src),
         });
-        let draw_buffer_cursor = DrawBuffer::new(device, queue, texture_bytes);
+        let draw_buffer = DrawBuffer::new(device, queue, texture_bytes);
         let mut res = DrawPass::new(
             surface_config,
             device,
             queue,
-            draw_buffer_cursor,
-            cursor_shader,
+            draw_buffer,
+            shader,
             camera,
             PrimitiveTopology::TriangleList,
             instance_layout,
             bcreate_viewmatrix,
+            bcreate_camera_rotation,
             prefix,
         );
-        let cursor_obj =
-            tobj::load_obj(obj_path, &tobj::GPU_LOAD_OPTIONS).expect("could not load object");
-        let cursor_vertices: Vec<V3> = cursor_obj.0[0]
+        let obj = tobj::load_obj(obj_path, &tobj::GPU_LOAD_OPTIONS).expect("could not load object");
+        let vertices: Vec<V3> = obj.0[0]
             .mesh
             .positions
             .chunks(3)
             .map(|c| V3::new(c[0], c[1], c[2]))
             .collect();
-        let cursor_texture_coordinates: Vec<[f32; 2]> = cursor_obj.0[0]
+        let texture_coordinates: Vec<[f32; 2]> = obj.0[0]
             .mesh
             .texcoords
             .chunks(2)
             .map(|tc| [tc[0], tc[1]])
             .collect();
-        let cursor_indices: Vec<u16> = cursor_obj.0[0]
-            .mesh
-            .indices
-            .iter()
-            .map(|i| *i as u16)
-            .collect();
+        let indices: Vec<u16> = obj.0[0].mesh.indices.iter().map(|i| *i as u16).collect();
         res.update_vertex_buffer(
             device,
-            &cursor_vertices
+            &vertices
                 .iter()
                 .copied()
-                .zip(cursor_texture_coordinates)
+                .zip(texture_coordinates)
                 .collect::<Vec<_>>(),
         );
-        res.update_index_buffer(device, &cursor_indices);
+        res.update_index_buffer(device, &indices);
         // this puts up only a single instance at the origin
         res.update_instance_buffer(device, &[0., 0., 0., 1.], 1);
         res
@@ -394,8 +389,15 @@ impl DrawPass {
         queue: &Queue,
         camera: &mut Camera,
     ) {
-        let bcreate_viewmatrix = self.view_matrix.is_some();
-        let (pipeline, view_matrix) = DrawPass::create_pipeline(
+        let bcreate_viewmatrix = self
+            .matrix_bind_group
+            .as_ref()
+            .map_or(false, |bg| bg.view_matrix.is_some());
+        let bcreate_camera_rotation = self
+            .matrix_bind_group
+            .as_ref()
+            .map_or(false, |bg| bg.camera_rotation_matrix.is_some());
+        let (pipeline, matrix_bind_group) = DrawPass::create_pipeline(
             device,
             queue,
             surface_config,
@@ -405,66 +407,139 @@ impl DrawPass {
             &self.draw_buffer.texture_bind_group_layout,
             &self.instance_layout,
             bcreate_viewmatrix,
+            bcreate_camera_rotation,
             &self.prefix,
         );
         self.pipeline = pipeline;
-        self.view_matrix = view_matrix;
+        self.matrix_bind_group = matrix_bind_group;
     }
 
-    fn create_view_matrix_bind_groups(
+    fn create_matrix_bind_group(
         device: &Device,
         queue: &Queue,
         camera: &mut Camera,
-    ) -> (BindGroup, BindGroupLayout, Buffer) {
+        bcreate_viewmatrix: bool,
+        bcreate_camera_rotation: bool,
+    ) -> Option<MatrixBindGroup> {
         // create the projection matrix buffer
-        let mx = camera.get_view_matrix();
-        let mx_ref: &[f32; 16] = mx.as_ref();
-        let mx_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        if !bcreate_viewmatrix {
+            return None;
+        }
+        let view_matrix = camera.get_view_matrix();
+        let view_matrix_ref: &[f32; 16] = view_matrix.as_ref();
+        let view_matrix_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("u_Transform"),
-            contents: bytemuck::cast_slice(mx_ref),
+            contents: bytemuck::cast_slice(view_matrix_ref),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        let camera_rotation_matrix: Matrix4<f32> = camera.rot.into();
+        let camera_rotation_matrix_ref: &[f32; 16] = camera_rotation_matrix.as_ref();
+        let camera_rotation_matrix_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("camera rotation matrix"),
+                contents: bytemuck::cast_slice(camera_rotation_matrix_ref),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        let mut entries = vec![BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::VERTEX,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: BufferSize::new(64),
+            },
+            count: None,
+        }];
+        if bcreate_camera_rotation {
+            entries.push(BindGroupLayoutEntry {
+                binding: 1,
+                visibility: ShaderStages::VERTEX,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: BufferSize::new(64),
+                },
+                count: None,
+            });
+        }
         // layout for the projection matrix
         let transform_bind_group_layout =
             device.create_bind_group_layout(&BindGroupLayoutDescriptor {
                 label: Some("Renderer: bind group layout"),
-                entries: &[BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::VERTEX,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(64),
-                    },
-                    count: None,
-                }],
+                entries: &entries,
             });
+
+        let mut bind_group_entries = vec![BindGroupEntry {
+            binding: 0,
+            resource: BindingResource::Buffer(BufferBinding {
+                buffer: &view_matrix_buffer,
+                offset: 0,
+                size: None,
+            }),
+        }];
+        if bcreate_camera_rotation {
+            bind_group_entries.push(BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::Buffer(BufferBinding {
+                    buffer: &camera_rotation_matrix_buffer,
+                    offset: 0,
+                    size: None,
+                }),
+            })
+        }
 
         // write to the projection matix buffer
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("u_Transform"),
             layout: &transform_bind_group_layout,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Buffer(BufferBinding {
-                    buffer: &mx_buf,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
+            entries: &bind_group_entries,
         });
-        queue.write_buffer(&mx_buf, 0, bytemuck::cast_slice(mx_ref));
-        (bind_group, transform_bind_group_layout, mx_buf)
+        queue.write_buffer(
+            &view_matrix_buffer,
+            0,
+            bytemuck::cast_slice(view_matrix_ref),
+        );
+        let mut res = MatrixBindGroup {
+            layout: transform_bind_group_layout,
+            bind_group,
+            view_matrix: Some(view_matrix_buffer),
+            camera_rotation_matrix: None,
+        };
+        if bcreate_camera_rotation {
+            queue.write_buffer(
+                &camera_rotation_matrix_buffer,
+                0,
+                bytemuck::cast_slice(camera_rotation_matrix_ref),
+            );
+            res.camera_rotation_matrix = Some(camera_rotation_matrix_buffer);
+            Some(res)
+        } else {
+            Some(res)
+        }
     }
 
     pub fn update_view_matrix(&mut self, queue: &Queue, camera: &mut Camera) {
-        if let Some(ViewMatrix {
-            matrix_bind_group: _,
-            view_matrix_buffer,
-        }) = self.view_matrix.as_ref()
+        if let Some(view_matrix_buffer) = self
+            .matrix_bind_group
+            .as_ref()
+            .and_then(|bg| bg.view_matrix.as_ref())
         {
             let mx = camera.get_view_matrix();
+            let mx_ref: &[f32; 16] = mx.as_ref();
+            queue.write_buffer(view_matrix_buffer, 0, bytemuck::cast_slice(mx_ref));
+        }
+    }
+
+    pub fn update_camera_rotation_matrix(&mut self, queue: &Queue, camera: &mut Camera) {
+        if let Some(view_matrix_buffer) = self
+            .matrix_bind_group
+            .as_ref()
+            .and_then(|bg| bg.camera_rotation_matrix.as_ref())
+        {
+            let mx: Matrix4<f32> = camera.rot.into();
+            let mx = mx.transpose();
             let mx_ref: &[f32; 16] = mx.as_ref();
             queue.write_buffer(view_matrix_buffer, 0, bytemuck::cast_slice(mx_ref));
         }
@@ -514,10 +589,12 @@ impl DrawPass {
 
     pub fn render<'a>(&'a self, rpass: &mut RenderPass<'a>) {
         rpass.set_pipeline(&self.pipeline);
-        if let Some(ViewMatrix {
-            matrix_bind_group,
-            view_matrix_buffer: _,
-        }) = self.view_matrix.as_ref()
+        if let Some(MatrixBindGroup {
+            layout: _,
+            bind_group: matrix_bind_group,
+            view_matrix: _,
+            camera_rotation_matrix: _,
+        }) = self.matrix_bind_group.as_ref()
         {
             rpass.set_bind_group(0, matrix_bind_group, &[]);
             rpass.set_bind_group(1, &self.draw_buffer.texture_bind_group, &[]);
@@ -542,10 +619,12 @@ impl DrawPass {
         instance_buffer_length: usize,
     ) {
         rpass.set_pipeline(&self.pipeline);
-        if let Some(ViewMatrix {
-            matrix_bind_group,
-            view_matrix_buffer: _,
-        }) = self.view_matrix.as_ref()
+        if let Some(MatrixBindGroup {
+            layout: _,
+            bind_group: matrix_bind_group,
+            view_matrix: _,
+            camera_rotation_matrix: _,
+        }) = self.matrix_bind_group.as_ref()
         {
             rpass.set_bind_group(0, matrix_bind_group, &[]);
         }

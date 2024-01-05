@@ -259,7 +259,7 @@ fn start(
             *control_flow = ControlFlow::Exit;
         }
         let (instances_raw, num_instances) = app.psys.get_instances();
-        app.renderer.sub_rpass_triangles.update_instance_buffer(
+        app.renderer.sub_rpass_particles.update_instance_buffer(
             &app.renderer.device,
             &instances_raw,
             num_instances,

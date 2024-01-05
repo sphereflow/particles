@@ -8,6 +8,7 @@ struct Transform {
 };
 
 @group(0) @binding(0) var<uniform> u_transform: Transform;
+@group(0) @binding(1) var<uniform> camera_rotation: Transform;
 
 @vertex
 fn vs_main(
@@ -16,7 +17,8 @@ fn vs_main(
         @location(2) instance_pos: vec4<f32>,
         ) -> VertexOutput {
     var out: VertexOutput;
-    out.out_pos = u_transform.transform * vec4<f32>(in_pos + instance_pos.xyz, 1.0);
+    let rotated_vertex = camera_rotation.transform * vec4<f32>(in_pos, 1.0);
+    out.out_pos = u_transform.transform * vec4<f32>(rotated_vertex.xyz + instance_pos.xyz, 1.0);
     out.tex_coord = tex_coord;
     return out;
 }

@@ -20,7 +20,7 @@ unsafe impl Pod for Vertex {}
 unsafe impl Zeroable for Vertex {}
 
 pub struct Renderer {
-    pub sub_rpass_triangles: DrawPass,
+    pub sub_rpass_particles: DrawPass,
     pub sub_rpass_cursor: DrawPass,
     pub sub_rpass_vector_field: DrawPass,
     pub device: Device,
@@ -66,6 +66,7 @@ impl Renderer {
             PrimitiveTopology::TriangleList,
             crate::draw_pass::INSTANCE_LAYOUT_PARTICLE,
             true,
+            true,
             "particles",
         );
         dbg!(crate::draw_pass::INSTANCE_LAYOUT_PARTICLE);
@@ -95,6 +96,7 @@ impl Renderer {
             &mut camera,
             INSTANCE_LAYOUT_POSITION,
             true,
+            true,
             "cursor",
         );
 
@@ -109,6 +111,7 @@ impl Renderer {
             &mut camera,
             INSTANCE_LAYOUT_VECTOR_FIELD,
             true,
+            false,
             "vector field",
         );
 
@@ -118,7 +121,7 @@ impl Renderer {
             Self::create_depth_texture(&device, surface_config);
 
         Renderer {
-            sub_rpass_triangles: sub_rpass_particles,
+            sub_rpass_particles,
             sub_rpass_cursor,
             sub_rpass_vector_field,
             egui_rpass,
@@ -135,7 +138,7 @@ impl Renderer {
 
     pub fn recreate_pipelines(&mut self) {
         self.recreate_pipelines = false;
-        self.sub_rpass_triangles.recreate_pipeline(
+        self.sub_rpass_particles.recreate_pipeline(
             &self.surface_config,
             &self.device,
             &self.queue,
@@ -247,7 +250,7 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            self.sub_rpass_triangles.render_with_instance_buffer(
+            self.sub_rpass_particles.render_with_instance_buffer(
                 &mut rpass,
                 &compute.particles_buffers[0],
                 compute.num_particles,

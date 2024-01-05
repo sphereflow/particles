@@ -79,7 +79,6 @@ impl Cursor {
     pub fn mouse_moved(&mut self, mouse_x: f32, mouse_y: f32, grid: &mut Grid<V3>) {
         self.mouse_pos_x = mouse_x;
         self.mouse_pos_y = mouse_y;
-        let cam_dir = self.rot * V3::new(0.0, 0.0, 1.0);
         if let Some((md_pos, _mdrot)) = self.mouse_down_on {
             let v_pos_dir = grid.get_instances();
             for (ix, md_v) in self

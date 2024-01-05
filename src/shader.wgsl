@@ -11,6 +11,8 @@ struct Transform {
 @binding(0)
 var<uniform> u_transform: Transform;
 
+@group(0) @binding(1) var<uniform> camera_rotation: Transform;
+
 @vertex
 fn vs_main(
         @location(0) in_pos: vec3<f32>,
@@ -19,7 +21,8 @@ fn vs_main(
         @location(3) particle_type: u32,
         ) -> VertexOutput {
     var out: VertexOutput;
-    out.out_pos = u_transform.transform * vec4<f32>(in_pos + instance_pos.xyz, 1.0);
+    let rotated_vertex = camera_rotation.transform * vec4<f32>(in_pos, 1.0);
+    out.out_pos = u_transform.transform * (rotated_vertex + instance_pos);
     out.tex_coord = vec2<f32>((tex_coord.x + f32(particle_type)) * 0.2, tex_coord.y);
     return out;
 }

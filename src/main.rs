@@ -332,15 +332,23 @@ impl App {
             .process_input(&self.pressed_keys);
 
         self.renderer
-            .sub_rpass_triangles
+            .sub_rpass_particles
             .update_view_matrix(&self.renderer.queue, &mut self.renderer.camera);
+        self.renderer
+            .sub_rpass_particles
+            .update_camera_rotation_matrix(&self.renderer.queue, &mut self.renderer.camera);
         self.renderer
             .sub_rpass_cursor
             .update_view_matrix(&self.renderer.queue, &mut self.renderer.camera);
+        self.renderer
+            .sub_rpass_cursor
+            .update_camera_rotation_matrix(&self.renderer.queue, &mut self.renderer.camera);
         let p = self.renderer.camera.cursor.pos;
-        self.renderer
-            .sub_rpass_cursor
-            .update_instance_buffer(&self.renderer.device, &[p.x, p.y, p.z, 1.0], 1);
+        self.renderer.sub_rpass_cursor.update_instance_buffer(
+            &self.renderer.device,
+            &[p.x, p.y, p.z, 1.0],
+            1,
+        );
         self.renderer
             .sub_rpass_vector_field
             .update_view_matrix(&self.renderer.queue, &mut self.renderer.camera);
@@ -362,7 +370,8 @@ impl App {
                 .get_instances_raw(&self.renderer.camera.cursor.modify_vector_indices),
             self.psys.force_grid.num_instances(),
         );
-        self.compute.update_sim_params(&self.renderer.device, &self.sim_params);
+        self.compute
+            .update_sim_params(&self.renderer.device, &self.sim_params);
         for code in &self.pressed_keys {
             match code {
                 Key::W => {

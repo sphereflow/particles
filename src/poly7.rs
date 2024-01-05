@@ -92,7 +92,7 @@ pub fn matrix_row_mul_add<const N: usize>(
 
 pub fn matrix_row_div<const N: usize>(div: f32, m: &mut [[f32; N]; N], row: usize) {
     for i in 0..N {
-        m[row][i] = m[row][i] / div;
+        m[row][i] /= div;
     }
 }
 

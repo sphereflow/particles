@@ -15,7 +15,7 @@ pub struct Camera {
     pos: V3,
     pub units_per_second: f32,
     angle_per_second: f32,
-    rot: Quaternion<f32>,
+    pub rot: Quaternion<f32>,
 }
 
 impl Camera {
