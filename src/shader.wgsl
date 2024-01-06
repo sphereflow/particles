@@ -22,7 +22,7 @@ fn vs_main(
         ) -> VertexOutput {
     var out: VertexOutput;
     let rotated_vertex = camera_rotation.transform * vec4<f32>(in_pos, 1.0);
-    out.out_pos = u_transform.transform * (rotated_vertex + instance_pos);
+    out.out_pos = u_transform.transform * vec4<f32>(rotated_vertex.xyz + instance_pos.xyz, 1.0);
     out.tex_coord = vec2<f32>((tex_coord.x + f32(particle_type)) * 0.2, tex_coord.y);
     return out;
 }
