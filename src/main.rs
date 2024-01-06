@@ -40,9 +40,9 @@ fn rand_v3(max: f32) -> V3 {
 
 fn rand_v4(max: f32) -> [f32; 4] {
     [
-        max * random::<f32>() - 0.5,
-        max * random::<f32>() - 0.5,
-        max * random::<f32>() - 0.5,
+        max * (random::<f32>() - 0.5),
+        max * (random::<f32>() - 0.5),
+        max * (random::<f32>() - 0.5),
         1.0,
     ]
 }
@@ -126,7 +126,7 @@ impl ParticleSystem {
                             (iz as f32 / num_z as f32) * max.z,
                             1.0,
                         ],
-                        vel: rand_v4(10.0),
+                        vel: [0.; 4],
                         ty: (index % 5) as u32,
                         _padd: [0; 3],
                     });
