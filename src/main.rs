@@ -108,6 +108,7 @@ impl Particle {
 }
 
 struct ParticleSystem {
+    particle_size: f32,
     particles: Vec<Particle>,
     force_grid: Grid<V3>,
 }
@@ -146,6 +147,7 @@ impl ParticleSystem {
         );
 
         ParticleSystem {
+            particle_size: 0.01,
             particles,
             force_grid,
         }
@@ -164,6 +166,20 @@ impl ParticleSystem {
         while self.particles.len() > num_particles {
             self.particles.pop();
         }
+    }
+
+    fn update_particle_size(&mut self, renderer: &mut Renderer) {
+        let d = self.particle_size;
+        let md = -self.particle_size;
+        renderer.sub_rpass_particles.update_vertex_buffer(
+            &renderer.device,
+            &[
+                (Vector3::new(md, d, d), [0.0, 1.0]),
+                (Vector3::new(d, d, d), [1.0, 1.0]),
+                (Vector3::new(md, md, d), [0.0, 0.0]),
+                (Vector3::new(d, md, d), [1.0, 0.0]),
+            ],
+        );
     }
 
     fn get_instances(&self) -> (Vec<f32>, usize) {

@@ -125,11 +125,23 @@ impl Gui {
             self.gui_mode = GuiMode::Cursor;
         }
         let mut num_particles = app.psys.particles.len();
-        if ui.add(Slider::new(&mut num_particles, 1..=50000)).changed() {
-            app.psys.set_num_particles(num_particles);
-            app.compute
-                .upload_particles(&app.renderer.device, &app.psys.particles)
-        }
+        ui.horizontal(|ui| {
+            ui.label("num particles: ");
+            if ui.add(Slider::new(&mut num_particles, 1..=50000)).changed() {
+                app.psys.set_num_particles(num_particles);
+                app.compute
+                    .upload_particles(&app.renderer.device, &app.psys.particles)
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("particle size: ");
+            if ui
+                .add(Slider::new(&mut app.psys.particle_size, 0.01..=1.0))
+                .changed()
+            {
+                app.psys.update_particle_size(&mut app.renderer);
+            }
+        });
         ui.vertical_centered_justified(|ui| {
             Self::edit_time_controls(ui, app);
             self.edit_cutoff(ui, &mut app.sim_params);
